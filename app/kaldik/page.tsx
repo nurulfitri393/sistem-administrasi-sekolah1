@@ -791,7 +791,6 @@ export default function KaldikPage() {
   },[daftarKlasifikasiAgenda,dataSiap])
 
   const loginGoogle=useGoogleLogin({
-    client_id:process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID!,
     scope:'https://www.googleapis.com/auth/calendar.readonly',
     onSuccess:async(t)=>{setGoogleAccessToken(t.access_token);await fetchHolidaysFromGoogle(t.access_token)},
     onError:()=>alert('Login Google gagal.'),
