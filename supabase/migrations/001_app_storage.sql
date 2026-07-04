@@ -1,6 +1,6 @@
--- Jalankan skrip ini SEKALI di Supabase Dashboard > SQL Editor
--- (Project: whnwipppzjauxkmdiqfv) sebelum fitur sinkronisasi lintas
--- perangkat/akun bisa berjalan.
+-- Jalankan skrip ini di Supabase Dashboard > SQL Editor.
+-- Skrip ini AMAN dijalankan berkali-kali (idempotent) -- tidak akan error
+-- walau tabel/policy/publication-nya sudah pernah dibuat sebelumnya.
 
 create table if not exists public.app_storage (
   key         text primary key,
@@ -35,6 +35,22 @@ drop policy if exists "app_storage_delete" on public.app_storage;
 create policy "app_storage_delete" on public.app_storage
   for delete using (auth.role() = 'authenticated');
 
--- Aktifkan realtime agar perubahan dari satu perangkat langsung terlihat
--- (tanpa perlu refresh) di perangkat lain yang sedang online.
-alter publication supabase_realtime add table public.app_storage;
+-- Aktifkan realtime -- dibungkus pengecekan supaya TIDAK ERROR walau
+-- tabel ini sudah pernah ditambahkan ke publication sebelumnya (ini yang
+-- menyebabkan error di percobaan Anda barusan, karena baris ini sempat
+-- dijalankan dua kali).
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'app_storage'
+  ) then
+    alter publication supabase_realtime add table public.app_storage;
+  end if;
+end $$;
+
+-- Verifikasi cepat: kalau baris di bawah ini berhasil menampilkan hasil
+-- (bukan error), berarti tabel app_storage sudah benar-benar ada & siap.
+select count(*) as jumlah_baris_saat_ini from public.app_storage;

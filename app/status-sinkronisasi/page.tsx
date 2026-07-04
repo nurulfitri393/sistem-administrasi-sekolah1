@@ -20,6 +20,7 @@ const LANGKAH_AWAL: Langkah[] = [
   { id: 'insert', judul: '3) Tulis data uji ke app_storage (INSERT/UPSERT)', status: 'menunggu' },
   { id: 'select2', judul: '4) Baca kembali data uji yang baru ditulis', status: 'menunggu' },
   { id: 'delete', judul: '5) Hapus data uji (DELETE, membersihkan)', status: 'menunggu' },
+  { id: 'patch', judul: '6) Uji alur ASLI aplikasi: localStorage.setItem → otomatis terkirim ke cloud?', status: 'menunggu' },
 ]
 
 export default function StatusSinkronisasiPage() {
@@ -119,6 +120,39 @@ export default function StatusSinkronisasiPage() {
       })
     }
 
+    // 6) Uji alur ASLI aplikasi: localStorage.setItem (yang sudah "disadap"
+    //    oleh lib/cloudSync.ts) -- ini BEDA dari langkah 3 di atas yang
+    //    memanggil Supabase langsung. Kalau langkah ini GAGAL padahal
+    //    langkah 2-5 semua LULUS, artinya masalahnya ada di mekanisme
+    //    penyadapan localStorage (lib/cloudSync.ts), BUKAN di Supabase.
+    perbarui('patch', { status: 'jalan' })
+    const kunciPatch = `_tes_localstorage_patch_${Date.now()}`
+    const nilaiPatch = `nilai-patch-${Math.random().toString(36).slice(2, 8)}`
+    try {
+      window.localStorage.setItem(kunciPatch, nilaiPatch)
+      // Tunggu lebih lama dari waktu debounce (400ms) di cloudSync.ts
+      await new Promise(resolve => setTimeout(resolve, 1500))
+
+      const { data, error } = await supabase.from('app_storage').select('value').eq('key', kunciPatch).maybeSingle()
+      if (error) throw error
+
+      if (data?.value === nilaiPatch) {
+        perbarui('patch', {
+          status: 'lulus',
+          detail: 'localStorage.setItem berhasil otomatis terkirim ke cloud. Mekanisme sinkronisasi aplikasi BEKERJA dengan benar.',
+        })
+      } else {
+        perbarui('patch', {
+          status: 'gagal',
+          detail: 'localStorage.setItem TIDAK terkirim ke cloud (data tidak ditemukan di tabel setelah 1.5 detik). Ini berarti mekanisme penyadapan localStorage di lib/cloudSync.ts tidak aktif/tidak berfungsi di build ini — walau koneksi Supabase-nya sendiri sehat (lihat langkah 2-5). Kemungkinan CloudSyncProvider tidak terpasang dengan benar di app/layout.tsx pada build yang sedang online ini.',
+        })
+      }
+      window.localStorage.removeItem(kunciPatch)
+      await supabase.from('app_storage').delete().eq('key', kunciPatch) // jaga-jaga kalau sempat kekirim tapi lambat
+    } catch (e: any) {
+      perbarui('patch', { status: 'gagal', detail: String(e?.message || e) })
+    }
+
     setBerjalan(false)
   }
 
@@ -172,10 +206,11 @@ export default function StatusSinkronisasiPage() {
           <code> supabase/migrations/001_app_storage.sql</code> di Supabase SQL Editor.<br />
           Kalau langkah 3 (INSERT) gagal soal permission/RLS → Anda perlu login dulu sebelum menguji, atau kebijakan
           RLS di Supabase belum sesuai dengan file migrasi terbaru.<br />
-          Kalau langkah 2–5 semua LULUS di sini tapi data <em>tetap</em> tidak muncul di perangkat lain saat
-          dipakai sungguhan → kemungkinan besar masalahnya bukan di Supabase, tapi di sisi
-          <code> lib/cloudSync.ts</code> (proses menyalin data cloud ke localStorage saat aplikasi dibuka) —
-          beri tahu saya hasil tes ini dan saya telusuri lebih lanjut dari situ.
+          <strong>Kalau langkah 2–5 semua LULUS tapi langkah 6 GAGAL</strong> → ini konfirmasi pasti bahwa
+          masalahnya BUKAN di Supabase (koneksinya sehat), tapi di mekanisme penyadapan
+          <code> localStorage</code> pada build aplikasi yang sedang online ini — beri tahu saya hasil ini persis
+          supaya saya telusuri <code>components/CloudSyncProvider.tsx</code> dan <code>app/layout.tsx</code> lebih
+          lanjut.
         </div>
       </main>
     </div>
