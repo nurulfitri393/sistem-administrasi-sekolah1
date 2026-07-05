@@ -1,10 +1,13 @@
 'use client'
 import { useAksesGuard } from '@/lib/useAksesGuard'
+import { bisaMengeditModul } from '@/lib/aksesPeran'
+import CatatanHanyaLihat from '@/components/CatatanHanyaLihat'
 
 import Sidebar from '@/components/Sidebar'
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
+import { kunciTahun } from '@/lib/tahunAjaran'
 import {
   Landmark, LogOut, Shield, BookOpen, Home, Building,
   CalendarDays, BarChart2, FileText, FileSpreadsheet, Clock,
@@ -516,6 +519,7 @@ export default function MingguEfektifPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const diizinkanAkses = useAksesGuard('minggu_efektif')
+  const bolehEdit = bisaMengeditModul('minggu_efektif')
   const [namaInduk, setNamaInduk] = useState('Lembaga / Yayasan Pusat')
   const [logoInduk, setLogoInduk] = useState('')
   const [namaSekolah, setNamaSekolah] = useState('')
@@ -575,17 +579,17 @@ export default function MingguEfektifPage() {
       const sr = localStorage.getItem('master_rombel'); if (sr) setDaftarRombel(JSON.parse(sr))
       const st = localStorage.getItem('master_tingkat'); if (st) setDaftarTingkat(JSON.parse(st))
       const sl = localStorage.getItem('daftar_lembaga'); if (sl) setDaftarLembagaUnit(JSON.parse(sl))
-      const sj = localStorage.getItem('data_jadwal_pelajaran'); if (sj) setDaftarJadwal(JSON.parse(sj))
-      const sw = localStorage.getItem('master_pemetaan_waktu'); if (sw) setDaftarWaktu(JSON.parse(sw))
-      const smj = localStorage.getItem('matriks_alokasi_rinci_samping'); if (smj) setMatriksJp(JSON.parse(smj))
+      const sj = localStorage.getItem(kunciTahun('data_jadwal_pelajaran')); if (sj) setDaftarJadwal(JSON.parse(sj))
+      const sw = localStorage.getItem(kunciTahun('master_pemetaan_waktu')); if (sw) setDaftarWaktu(JSON.parse(sw))
+      const smj = localStorage.getItem(kunciTahun('matriks_alokasi_rinci_samping')); if (smj) setMatriksJp(JSON.parse(smj))
 
       // Data kaldik — sumber yang benar adalah 'kaldik_agenda_list' (dibuat modul Kaldik)
-      const ska = localStorage.getItem('kaldik_agenda_list')
+      const ska = localStorage.getItem(kunciTahun('kaldik_agenda_list'))
       if (ska) { try { setDaftarAgenda(JSON.parse(ska)) } catch { /* abaikan */ } }
 
       // Load semester setting
-      const sgs = localStorage.getItem('setting_semester_ganjil'); if (sgs) setSemesterGanjil(JSON.parse(sgs))
-      const sge = localStorage.getItem('setting_semester_genap'); if (sge) setSemesterGenap(JSON.parse(sge))
+      const sgs = localStorage.getItem(kunciTahun('setting_semester_ganjil')); if (sgs) setSemesterGanjil(JSON.parse(sgs))
+      const sge = localStorage.getItem(kunciTahun('setting_semester_genap')); if (sge) setSemesterGenap(JSON.parse(sge))
 
       setLoading(false)
     }
@@ -594,8 +598,8 @@ export default function MingguEfektifPage() {
 
   // Simpan perubahan semester
   const simpanSemester = (sem: SemesterInfo, jenis: 'ganjil' | 'genap') => {
-    if (jenis === 'ganjil') { setSemesterGanjil(sem); localStorage.setItem('setting_semester_ganjil', JSON.stringify(sem)) }
-    else { setSemesterGenap(sem); localStorage.setItem('setting_semester_genap', JSON.stringify(sem)) }
+    if (jenis === 'ganjil') { setSemesterGanjil(sem); localStorage.setItem(kunciTahun('setting_semester_ganjil'), JSON.stringify(sem)) }
+    else { setSemesterGenap(sem); localStorage.setItem(kunciTahun('setting_semester_genap'), JSON.stringify(sem)) }
   }
 
   const semesterSaatIni = semesterAktif === 'ganjil' ? semesterGanjil : semesterGenap
@@ -810,6 +814,7 @@ export default function MingguEfektifPage() {
             <Calendar className="w-5 h-5 text-[#6A197D]" />
             <h2 className="font-bold text-slate-800 text-sm">Pengaturan Rentang Semester</h2>
           </div>
+          {bolehEdit ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             {/* Ganjil */}
             <div className="space-y-3 border border-[#6A197D]/15 rounded-xl p-4 bg-[#6A197D]/5">
@@ -862,6 +867,9 @@ export default function MingguEfektifPage() {
               </div>
             </div>
           </div>
+          ) : (
+            <CatatanHanyaLihat pesan="Anda tidak diberi izin untuk mengubah rentang tanggal semester. Hasil perhitungan minggu efektif di bawah tetap bisa dilihat & dicetak." />
+          )}
           <p className="text-[10px] text-slate-400 font-medium">
             * Data hari libur/kegiatan diambil otomatis dari Kalender Pendidikan (modul Kaldik). Pastikan sudah diisi di sana.
           </p>

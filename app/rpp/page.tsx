@@ -4,7 +4,10 @@ import Sidebar from '@/components/Sidebar'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
+import { kunciTahun } from '@/lib/tahunAjaran'
 import { useAksesGuard } from '@/lib/useAksesGuard'
+import { bisaMengeditModul, getCakupanMengajarGuru } from '@/lib/aksesPeran'
+import CatatanHanyaLihat from '@/components/CatatanHanyaLihat'
 import { 
   Clock, Trash2, Search, AlertTriangle, 
   Landmark, LogOut, Shield, BookOpen, CheckCircle,
@@ -16,6 +19,8 @@ export default function JadwalPelajaranPage() {
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const diizinkanAkses = useAksesGuard('rpp')
+  const bolehEdit = bisaMengeditModul('rpp')
+  const cakupanGuru = getCakupanMengajarGuru() // null utk Admin, berisi guruId utk Guru
   const [namaInduk, setNamaInduk] = useState('Lembaga / Yayasan Pusat')
   const [logoInduk, setLogoInduk] = useState('')
 
@@ -112,22 +117,27 @@ export default function JadwalPelajaranPage() {
 
         if (storedGuru) setDaftarGuru(JSON.parse(storedGuru))
 
-        const storedJadwal = localStorage.getItem('data_jadwal_pelajaran')
+        // Kalau yang login adalah Guru, kunci rekap ke dirinya sendiri --
+        // tidak bisa melihat rekap beban JP guru lain.
+        const cakupan = getCakupanMengajarGuru()
+        if (cakupan?.guruId) setCariGuruId(cakupan.guruId)
+
+        const storedJadwal = localStorage.getItem(kunciTahun('data_jadwal_pelajaran'))
         if (storedJadwal) setDaftarJadwal(JSON.parse(storedJadwal))
 
-        const storedWaktu = localStorage.getItem('master_pemetaan_waktu')
+        const storedWaktu = localStorage.getItem(kunciTahun('master_pemetaan_waktu'))
         if (storedWaktu) setDaftarWaktu(JSON.parse(storedWaktu))
 
-        const storedMatriksRinci = localStorage.getItem('matriks_alokasi_rinci_samping')
+        const storedMatriksRinci = localStorage.getItem(kunciTahun('matriks_alokasi_rinci_samping'))
         if (storedMatriksRinci) setMatriksRinciJp(JSON.parse(storedMatriksRinci))
 
-        const storedRequestHariJp = localStorage.getItem('request_hari_jp_guru')
+        const storedRequestHariJp = localStorage.getItem(kunciTahun('request_hari_jp_guru'))
         if (storedRequestHariJp) setRequestHariJp(JSON.parse(storedRequestHariJp))
 
-        const storedKelasGabungan = localStorage.getItem('master_kelas_gabungan')
+        const storedKelasGabungan = localStorage.getItem(kunciTahun('master_kelas_gabungan'))
         if (storedKelasGabungan) setDaftarKelasGabungan(JSON.parse(storedKelasGabungan))
 
-        const storedMaksJp = localStorage.getItem('master_maks_jp_guru_per_hari')
+        const storedMaksJp = localStorage.getItem(kunciTahun('master_maks_jp_guru_per_hari'))
         if (storedMaksJp) setMaksJpGuruPerHari(Number(storedMaksJp) || 10)
 
         setLoading(false)
@@ -149,7 +159,7 @@ export default function JadwalPelajaranPage() {
     }
     const updated = [...daftarWaktu, newWaktu]
     setDaftarWaktu(updated)
-    localStorage.setItem('master_pemetaan_waktu', JSON.stringify(updated))
+    localStorage.setItem(kunciTahun('master_pemetaan_waktu'), JSON.stringify(updated))
     setLabelWaktu('')
   }
 
@@ -157,31 +167,31 @@ export default function JadwalPelajaranPage() {
     if (confirm('Hapus slot waktu ini? (Akan menghapus jadwal yang menggunakannya)')) {
       const filtered = daftarWaktu.filter(item => item.id !== id)
       setDaftarWaktu(filtered)
-      localStorage.setItem('master_pemetaan_waktu', JSON.stringify(filtered))
+      localStorage.setItem(kunciTahun('master_pemetaan_waktu'), JSON.stringify(filtered))
       
       const filterJadwal = daftarJadwal.filter(j => j.waktuId !== id)
       setDaftarJadwal(filterJadwal)
-      localStorage.setItem('data_jadwal_pelajaran', JSON.stringify(filterJadwal))
+      localStorage.setItem(kunciTahun('data_jadwal_pelajaran'), JSON.stringify(filterJadwal))
     }
   }
 
   // --- SIMPAN MAKS JP GURU PER HARI ---
   const handleSimpanMaksJp = (val: number) => {
     setMaksJpGuruPerHari(val)
-    localStorage.setItem('master_maks_jp_guru_per_hari', String(val))
+    localStorage.setItem(kunciTahun('master_maks_jp_guru_per_hari'), String(val))
   }
 
   // --- MATRIKS GURU DENGAN KELAS MELEBAR KE SAMPING BESERTA RINCIAN JP ---
   const handleMatriksRinciChange = (key: string, val: string) => {
      const updated = { ...matriksRinciJp, [key]: val }
      setMatriksRinciJp(updated)
-     localStorage.setItem('matriks_alokasi_rinci_samping', JSON.stringify(updated))
+     localStorage.setItem(kunciTahun('matriks_alokasi_rinci_samping'), JSON.stringify(updated))
   }
 
   const handleRequestHariJpChange = (key: string, val: string) => {
      const updated = { ...requestHariJp, [key]: val }
      setRequestHariJp(updated)
-     localStorage.setItem('request_hari_jp_guru', JSON.stringify(updated))
+     localStorage.setItem(kunciTahun('request_hari_jp_guru'), JSON.stringify(updated))
   }
 
   const hitungTotalJpFromString = (strVal: string) => {
@@ -256,7 +266,7 @@ export default function JadwalPelajaranPage() {
      }
      const updated = [...daftarKelasGabungan, newGabungan]
      setDaftarKelasGabungan(updated)
-     localStorage.setItem('master_kelas_gabungan', JSON.stringify(updated))
+     localStorage.setItem(kunciTahun('master_kelas_gabungan'), JSON.stringify(updated))
      setFormGabunganMapelId('')
      setFormGabunganGuruId('')
      setFormGabunganRombelIds([])
@@ -267,7 +277,7 @@ export default function JadwalPelajaranPage() {
      if (confirm('Hapus aturan kelas gabungan ini? Jadwal yang sudah digabung sebelumnya tidak otomatis terhapus, namun validasi gabungan untuk kombinasi ini tidak lagi berlaku.')) {
         const filtered = daftarKelasGabungan.filter(kg => kg.id !== id)
         setDaftarKelasGabungan(filtered)
-        localStorage.setItem('master_kelas_gabungan', JSON.stringify(filtered))
+        localStorage.setItem(kunciTahun('master_kelas_gabungan'), JSON.stringify(filtered))
      }
   }
 
@@ -631,7 +641,7 @@ export default function JadwalPelajaranPage() {
      })
 
      setDaftarJadwal(generatedJadwal)
-     localStorage.setItem('data_jadwal_pelajaran', JSON.stringify(generatedJadwal))
+     localStorage.setItem(kunciTahun('data_jadwal_pelajaran'), JSON.stringify(generatedJadwal))
 
      if (peringatanGenerate.length > 0) {
         alert('Generate selesai dengan beberapa CATATAN (alokasi belum penuh karena zona jam penuh / bentrok / slot habis / maks JP harian):\n\n' + peringatanGenerate.slice(0, 15).join('\n') + (peringatanGenerate.length > 15 ? `\n...dan ${peringatanGenerate.length - 15} catatan lainnya.` : ''))
@@ -654,7 +664,7 @@ export default function JadwalPelajaranPage() {
      if (!editGuruMapel) {
         if (currentJadwalItem) {
            const filtered = daftarJadwal.filter(j => j.id !== currentJadwalItem.id)
-           setDaftarJadwal(filtered); localStorage.setItem('data_jadwal_pelajaran', JSON.stringify(filtered))
+           setDaftarJadwal(filtered); localStorage.setItem(kunciTahun('data_jadwal_pelajaran'), JSON.stringify(filtered))
         }
      } else {
         const [gId, mId] = editGuruMapel.split('|')
@@ -678,7 +688,7 @@ export default function JadwalPelajaranPage() {
               guruId: gId,
               mapelId: mId
            } : j)
-           setDaftarJadwal(updated); localStorage.setItem('data_jadwal_pelajaran', JSON.stringify(updated))
+           setDaftarJadwal(updated); localStorage.setItem(kunciTahun('data_jadwal_pelajaran'), JSON.stringify(updated))
         } else {
            const newJadwal = {
               id: 'jdwl-' + Date.now(),
@@ -691,7 +701,7 @@ export default function JadwalPelajaranPage() {
               unitFilter
            }
            const updated = [...daftarJadwal, newJadwal]
-           setDaftarJadwal(updated); localStorage.setItem('data_jadwal_pelajaran', JSON.stringify(updated))
+           setDaftarJadwal(updated); localStorage.setItem(kunciTahun('data_jadwal_pelajaran'), JSON.stringify(updated))
         }
      }
      setEditingCell(null)
@@ -761,6 +771,7 @@ export default function JadwalPelajaranPage() {
 
            <div>
               <label className="text-[10px] font-extrabold text-[#330B40] uppercase tracking-wider mb-1.5 block">Maks. JP Mengajar / Hari (per Pendidik)</label>
+              {bolehEdit ? (
               <input 
                 type="number" 
                 min={1}
@@ -768,6 +779,9 @@ export default function JadwalPelajaranPage() {
                 onChange={e => handleSimpanMaksJp(Number(e.target.value) || 1)} 
                 className="w-full px-4 py-2.5 border border-[#E3C2ED] rounded-xl text-xs bg-white font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0]" 
               />
+              ) : (
+                <p className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-xs bg-slate-50 font-bold text-slate-500">{maksJpGuruPerHari} JP/hari</p>
+              )}
            </div>
 
            <div className="flex bg-white rounded-xl border border-slate-200 p-1.5 self-center justify-self-end w-full md:col-span-3 flex-wrap gap-1">
@@ -782,6 +796,7 @@ export default function JadwalPelajaranPage() {
         {/* --- TAB 1 : PEMETAAN WAKTU TIAP JP & ISTIRAHAT --- */}
         {tabView === 'waktu' && (
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-8 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+             {bolehEdit ? (
              <form onSubmit={handleSimpanWaktu} className="space-y-4 xl:col-span-1 border-r border-slate-100 pr-0 xl:pr-6">
                 <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
                    <Clock className="w-4 h-4 text-[#6A197D]" />
@@ -820,6 +835,11 @@ export default function JadwalPelajaranPage() {
 
                 <button type="submit" className="w-full bg-[#6A197D] text-white py-3 rounded-xl font-bold text-xs shadow-md hover:bg-[#571466] transition mt-6">+ Tambahkan Master Waktu</button>
              </form>
+             ) : (
+               <div className="xl:col-span-1 border-r border-slate-100 pr-0 xl:pr-6">
+                 <CatatanHanyaLihat pesan="Anda tidak diberi izin untuk menambah master slot waktu. Daftar di sebelah tetap bisa dilihat." />
+               </div>
+             )}
 
              <div className="xl:col-span-2 space-y-4">
                 <h2 className="text-xs font-black text-slate-600 uppercase tracking-wider pb-2 border-b border-slate-100">Tabel Pemetaan Master Waktu</h2>
@@ -863,6 +883,7 @@ export default function JadwalPelajaranPage() {
         {/* --- TAB 2 : KELAS GABUNGAN --- */}
         {tabView === 'gabungan' && (
           <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+             {bolehEdit ? (
              <form onSubmit={handleSimpanKelasGabungan} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4 xl:col-span-1">
                 <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
                    <Users className="w-4 h-4 text-emerald-600" />
@@ -910,6 +931,11 @@ export default function JadwalPelajaranPage() {
                    <Plus className="w-4 h-4" /> Daftarkan Kelas Gabungan
                 </button>
              </form>
+             ) : (
+               <div className="xl:col-span-1">
+                 <CatatanHanyaLihat pesan="Anda tidak diberi izin untuk menambah aturan kelas gabungan. Daftar di sebelah tetap bisa dilihat." />
+               </div>
+             )}
 
              <div className="xl:col-span-2 space-y-4">
                 <h2 className="text-xs font-black text-slate-600 uppercase tracking-wider pb-2 border-b border-slate-100">Daftar Aturan Kelas Gabungan Aktif</h2>
@@ -947,6 +973,7 @@ export default function JadwalPelajaranPage() {
 
         {/* --- TAB 3 : MATRIKS PILOTING RINCI MELEBAR KESAMPING & CEKLIST REQUEST HARI/JAM --- */}
         {tabView === 'input' && (
+          <fieldset disabled={!bolehEdit} className="space-y-8 border-0 p-0 m-0 min-w-0">
           <div className="space-y-8">
              
              {/* 1. MATRIKS UTAMA MELEBAR MENYAMPING SECARA RINCI */}
@@ -1185,6 +1212,12 @@ export default function JadwalPelajaranPage() {
                 <p className="text-[9px] text-slate-400 font-semibold flex items-center gap-1.5"><Layers className="w-3 h-3 text-emerald-500" /> Ikon ini menandakan slot merupakan bagian dari Kelas Gabungan (tidak dianggap bentrok dengan rombel pasangannya).</p>
              </div>
           </div>
+          {!bolehEdit && (
+            <p className="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 -mt-4">
+              Anda hanya bisa melihat matriks ini. Kolom isian dinonaktifkan karena peran Anda tidak diberi izin mengubah modul ini.
+            </p>
+          )}
+          </fieldset>
         )}
 
         {/* --- TAB 4 : REKAP BEBAN JP GURU --- */}
@@ -1197,7 +1230,7 @@ export default function JadwalPelajaranPage() {
              
              <div className="md:w-1/3 relative">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3.5" />
-                <select value={cariGuruId} onChange={e => setCariGuruId(e.target.value)} className="w-full pl-9 pr-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
+                <select value={cariGuruId} onChange={e => setCariGuruId(e.target.value)} disabled={!!cakupanGuru} className="w-full pl-9 pr-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white disabled:bg-slate-50 disabled:text-slate-500">
                    <option value="">🔍 Cari guru untuk melihat rekap jam...</option>
                    {daftarGuru.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
                 </select>

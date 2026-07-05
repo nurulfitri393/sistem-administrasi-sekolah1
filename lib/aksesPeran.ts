@@ -90,3 +90,47 @@ export function bisaMengeditModul(moduleId: string): boolean {
   if (info.aksesMap === 'all') return true
   return !!info.aksesMap[moduleId]?.write
 }
+
+/**
+ * Mapel & rombel yang diampu Guru yang SEDANG LOGIN -- dipakai untuk
+ * memfilter isi modul CP/TP/ATP, Prota-Promes, dan RPP supaya seorang guru
+ * (mis. Guru Matematika) HANYA melihat data mapel yang dia ampu sendiri,
+ * tidak bisa melihat data mapel/guru lain.
+ *
+ * Mengembalikan `null` untuk Admin (artinya: tidak difilter, tampilkan semua).
+ * Untuk Guru, mengembalikan { mapelIds, mapelRombel, guruId } sesuai data
+ * penugasannya di menu Kelola Data Guru.
+ */
+export interface CakupanMengajarGuru {
+  guruId: string
+  mapelIds: string[]
+  mapelRombel: Record<string, string[]>
+}
+
+export function getCakupanMengajarGuru(): CakupanMengajarGuru | null {
+  if (typeof window === 'undefined') return null
+
+  const sesiGuruRaw = localStorage.getItem('sesi_guru_login')
+  if (!sesiGuruRaw) return null // Admin -> tidak difilter
+
+  let guruSesi: any = {}
+  try {
+    guruSesi = JSON.parse(sesiGuruRaw)
+  } catch {
+    return { guruId: '', mapelIds: [], mapelRombel: {} }
+  }
+
+  let daftarGuru: any[] = []
+  try { daftarGuru = JSON.parse(localStorage.getItem('master_guru') || '[]') } catch {}
+
+  const guruData =
+    daftarGuru.find(g => g.id && guruSesi.id && g.id === guruSesi.id) ||
+    daftarGuru.find(g => g.email && guruSesi.email && g.email === guruSesi.email) ||
+    daftarGuru.find(g => g.nama && guruSesi.nama && g.nama === guruSesi.nama)
+
+  return {
+    guruId: guruData?.id || '',
+    mapelIds: guruData?.mapelIds || [],
+    mapelRombel: guruData?.mapelRombel || {},
+  }
+}

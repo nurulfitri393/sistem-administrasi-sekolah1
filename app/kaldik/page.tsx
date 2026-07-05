@@ -7,6 +7,7 @@ import Sidebar from '@/components/Sidebar'
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
+import { kunciTahun } from '@/lib/tahunAjaran'
 import { useGoogleLogin } from '@react-oauth/google'
 import {
   CalendarDays, Home, ArrowLeft, Calendar, Plus, Trash2, RefreshCw,
@@ -574,14 +575,6 @@ function CetakKaldikModal({onClose,namaSekolah,tahunAjaran,daftarAgenda,daftarUn
   useEffect(()=>{return()=>{if(previewRef.current) URL.revokeObjectURL(previewRef.current)}},[])
 
   function simpanProfil() {
-    localStorage.setItem('nama_sekolah',profil.namaSekolah)
-    localStorage.setItem('profil_npsn',profil.npsn)
-    localStorage.setItem('profil_alamat',profil.alamat)
-    localStorage.setItem('profil_kota',profil.kota)
-    localStorage.setItem('profil_mudir',profil.namaMudir)
-    localStorage.setItem('profil_nip_mudir',profil.nipMudir)
-    localStorage.setItem('profil_kepala',profil.namaKepala)
-    localStorage.setItem('profil_nip',profil.nipKepala)
     localStorage.setItem('profil_titimangsa',profil.titiMangsa)
     setEditProfil(false)
   }
@@ -661,19 +654,16 @@ function CetakKaldikModal({onClose,namaSekolah,tahunAjaran,daftarAgenda,daftarUn
               )}
               {editProfil&&(
                 <div className="px-4 py-4 space-y-3 border-t border-gray-100">
-                  <p className="text-[10px] text-gray-400">Diambil otomatis dari modul Identitas Lembaga (mengikuti unit yang dipilih di atas). Ubah di sini jika perlu — perubahan hanya berlaku untuk sesi cetak ini.</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="col-span-2"><label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Nama Lembaga / Yayasan</label><input type="text" value={profil.namaSekolah} onChange={e=>setProfil(p=>({...p,namaSekolah:e.target.value}))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0" /></div>
-                    <div><label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Kota</label><input type="text" value={profil.kota} onChange={e=>setProfil(p=>({...p,kota:e.target.value}))} placeholder="Bandung" className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0" /></div>
-                    <div className="col-span-2"><label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Titi Mangsa (tanggal surat)</label><input type="text" value={profil.titiMangsa} onChange={e=>setProfil(p=>({...p,titiMangsa:e.target.value}))} placeholder={titiMangsaHariIni(profil.kota)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0" /><p className="text-[9px] text-gray-400 mt-0.5">Kosong = otomatis hari ini</p></div>
-                    <div className="col-span-2 pt-2 border-t border-gray-100"><p className="text-[10px] font-bold text-gray-500 uppercase mb-2">Untuk Kaldik Keseluruhan (Mudir)</p></div>
-                    <div><label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Nama Mudir</label><input type="text" value={profil.namaMudir} onChange={e=>setProfil(p=>({...p,namaMudir:e.target.value}))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0" /></div>
-                    <div><label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">NIP Mudir</label><input type="text" value={profil.nipMudir} onChange={e=>setProfil(p=>({...p,nipMudir:e.target.value}))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0" /></div>
-                    <div className="col-span-2 pt-2 border-t border-gray-100"><p className="text-[10px] font-bold text-gray-500 uppercase mb-2">Untuk Kaldik Lembaga / Unit</p></div>
-                    <div><label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Nama Kepala Sekolah</label><input type="text" value={profil.namaKepala} onChange={e=>setProfil(p=>({...p,namaKepala:e.target.value}))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0" /></div>
-                    <div><label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">NIP Kepala Sekolah</label><input type="text" value={profil.nipKepala} onChange={e=>setProfil(p=>({...p,nipKepala:e.target.value}))} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0" /></div>
+                  <p className="text-[10px] text-gray-400">Nama lembaga, Mudir, dan Kepala Sekolah diambil <strong>otomatis</strong> dari menu Identitas Lembaga &amp; Kelola Data Guru — tidak bisa diubah manual di sini. Hanya Titi Mangsa (tanggal surat) yang bisa disesuaikan.</p>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1 text-[11px]">
+                    <p><span className="font-bold text-gray-600">Nama Lembaga:</span> {profil.namaSekolah || namaSekolah || '—'}</p>
+                    <p><span className="font-bold text-gray-600">Mudir:</span> {profil.namaMudir || 'Belum diatur di Kelola Data Guru'}{profil.nipMudir ? ` / NIP. ${profil.nipMudir}` : ''}</p>
+                    <p><span className="font-bold text-gray-600">Kepala Sekolah Unit:</span> {profil.namaKepala || 'Belum diatur di Kelola Data Guru'}{profil.nipKepala ? ` / NIP. ${profil.nipKepala}` : ''}</p>
                   </div>
-                  <button onClick={simpanProfil} className="w-full py-2 rounded-lg text-sm font-semibold bg-[#6A197D] hover:bg-[#551566] text-white transition">Simpan Identitas</button>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2"><label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Titi Mangsa (tanggal surat)</label><input type="text" value={profil.titiMangsa} onChange={e=>setProfil(p=>({...p,titiMangsa:e.target.value}))} placeholder={titiMangsaHariIni(profil.kota)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0" /><p className="text-[9px] text-gray-400 mt-0.5">Kosong = otomatis hari ini</p></div>
+                  </div>
+                  <button onClick={simpanProfil} className="w-full py-2 rounded-lg text-sm font-semibold bg-[#6A197D] hover:bg-[#551566] text-white transition">Simpan Titi Mangsa</button>
                 </div>
               )}
             </div>
@@ -779,7 +769,7 @@ export default function KaldikPage() {
       const st=localStorage.getItem('master_tingkat');if(st) setMasterTingkatLokal(JSON.parse(st))
       const sr=localStorage.getItem('master_rombel');if(sr) setMasterRombelLokal(JSON.parse(sr))
       const sk=localStorage.getItem('kaldik_klasifikasi_list');if(sk){try{setDaftarKlasifikasiAgenda(JSON.parse(sk))}catch{}}
-      const sa=localStorage.getItem('kaldik_agenda_list');if(sa){try{setDaftarAgenda(JSON.parse(sa))}catch{}}
+      const sa=localStorage.getItem(kunciTahun('kaldik_agenda_list'));if(sa){try{setDaftarAgenda(JSON.parse(sa))}catch{}}
       setLoading(false);setDataSiap(true)
     }
     checkUser()
@@ -787,8 +777,8 @@ export default function KaldikPage() {
 
   useEffect(()=>{
     if(!dataSiap) return
-    if(daftarAgenda.length>0) localStorage.setItem('kaldik_agenda_list',JSON.stringify(daftarAgenda))
-    else localStorage.removeItem('kaldik_agenda_list')
+    if(daftarAgenda.length>0) localStorage.setItem(kunciTahun('kaldik_agenda_list'),JSON.stringify(daftarAgenda))
+    else localStorage.removeItem(kunciTahun('kaldik_agenda_list'))
   },[daftarAgenda,dataSiap])
 
   useEffect(()=>{
@@ -825,7 +815,7 @@ export default function KaldikPage() {
   const handleImportAgendaGoogle=()=>{
     const dipilih=agendaImporGoogle.filter((_,i)=>agendaTerpilihImport.includes(i))
     const baru=dipilih.filter(item=>!daftarAgenda.some(e=>e.tanggal===item.tanggal&&e.keterangan===item.keterangan))
-    setDaftarAgenda(prev=>{const next=[...prev,...baru];localStorage.setItem('kaldik_agenda_list',JSON.stringify(next));return next})
+    setDaftarAgenda(prev=>{const next=[...prev,...baru];localStorage.setItem(kunciTahun('kaldik_agenda_list'),JSON.stringify(next));return next})
     setShowModalImport(false)
     const skip=dipilih.length-baru.length
     alert(skip>0?`${baru.length} diimpor, ${skip} dilewati.`:`${baru.length} agenda diimpor!`)
@@ -864,7 +854,7 @@ export default function KaldikPage() {
     let next:AgendaItem[]
     if(indexEdit!==null){next=[...daftarAgenda];next[indexEdit]=na;setDaftarAgenda(next);setIndexEdit(null);alert('Agenda diperbarui!')}
     else{next=[...daftarAgenda,na];setDaftarAgenda(next);alert('Agenda disimpan!')}
-    localStorage.setItem('kaldik_agenda_list',JSON.stringify(next))
+    localStorage.setItem(kunciTahun('kaldik_agenda_list'),JSON.stringify(next))
     setTanggal('');setTanggalSelesai('');setKeterangan('');setLembagaTerlibat(['lembaga-induk']);setTingkatTerlibat([]);setRombelTerlibat([])
   }
   const handleEditAgendaClick=(idx:number)=>{
@@ -876,7 +866,7 @@ export default function KaldikPage() {
     window.scrollTo({top:300,behavior:'smooth'})
   }
   const handleBatalEdit=()=>{setIndexEdit(null);setTanggal('');setTanggalSelesai('');setKeterangan('');setStatusHari('libur');setLembagaTerlibat(['lembaga-induk']);setTingkatTerlibat([]);setRombelTerlibat([])}
-  const handleHapusAgenda=(idx:number)=>{const next=daftarAgenda.filter((_,i)=>i!==idx);setDaftarAgenda(next);localStorage.setItem('kaldik_agenda_list',JSON.stringify(next))}
+  const handleHapusAgenda=(idx:number)=>{const next=daftarAgenda.filter((_,i)=>i!==idx);setDaftarAgenda(next);localStorage.setItem(kunciTahun('kaldik_agenda_list'),JSON.stringify(next))}
 
   const getUnitLabel=(id:string)=>daftarUnitLembaga.find(u=>u.id===id)||{label:'Lainnya'}
   // Daftar agenda diurutkan berdasarkan TANGGAL (bukan urutan input) supaya mudah

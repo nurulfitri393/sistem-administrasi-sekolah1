@@ -1,10 +1,12 @@
 'use client'
 import { useAksesGuard } from '@/lib/useAksesGuard'
+import { bisaMengeditModul, getCakupanMengajarGuru } from '@/lib/aksesPeran'
 
 import Sidebar from '@/components/Sidebar'
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
+import { kunciTahun } from '@/lib/tahunAjaran'
 import {
   Landmark, LogOut, Shield, BookOpen, Home, Building,
   CalendarDays, BarChart2, FileText, FileSpreadsheet, Clock,
@@ -158,12 +160,17 @@ export default function CpTpAtpPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const diizinkanAkses = useAksesGuard('cp_tp_atp')
+  const bolehEdit = bisaMengeditModul('cp_tp_atp')
+  const cakupanGuru = getCakupanMengajarGuru() // null utk Admin, berisi mapelIds utk Guru
   const [namaInduk, setNamaInduk] = useState('Lembaga / Yayasan Pusat')
   const [logoInduk, setLogoInduk] = useState('')
   const [namaSekolah, setNamaSekolah] = useState('')
 
   const [daftarGuru, setDaftarGuru] = useState<any[]>([])
   const [daftarMapel, setDaftarMapel] = useState<any[]>([])
+  const daftarMapelTampil = cakupanGuru
+    ? daftarMapel.filter(m => cakupanGuru.mapelIds.includes(m.id))
+    : daftarMapel
   const [daftarRombel, setDaftarRombel] = useState<any[]>([])
 
   // Data CP Umum / CP / Materi / TP / ATP
@@ -246,13 +253,20 @@ export default function CpTpAtpPage() {
 
       const sg = localStorage.getItem('master_guru'); if (sg) setDaftarGuru(JSON.parse(sg))
       const sm = localStorage.getItem('master_mapel'); if (sm) setDaftarMapel(JSON.parse(sm))
+
+      // Kalau yang login adalah Guru, kunci ke mapel yang dia ampu saja.
+      // Kalau cuma ampu 1 mapel, langsung dipilihkan otomatis.
+      const cakupan = getCakupanMengajarGuru()
+      if (cakupan && cakupan.mapelIds.length === 1) {
+        setFilterMapelId(cakupan.mapelIds[0])
+      }
       const sr = localStorage.getItem('master_rombel'); if (sr) setDaftarRombel(JSON.parse(sr))
 
-      const scu = localStorage.getItem('data_cp_umum'); if (scu) setDaftarCpUmum(JSON.parse(scu))
-      const scp = localStorage.getItem('data_cp'); if (scp) setDaftarCp(JSON.parse(scp))
-      const smt = localStorage.getItem('data_materi'); if (smt) setDaftarMateri(JSON.parse(smt))
-      const stp = localStorage.getItem('data_tp'); if (stp) setDaftarTp(JSON.parse(stp))
-      const satp = localStorage.getItem('data_atp'); if (satp) setDaftarAtp(JSON.parse(satp))
+      const scu = localStorage.getItem(kunciTahun('data_cp_umum')); if (scu) setDaftarCpUmum(JSON.parse(scu))
+      const scp = localStorage.getItem(kunciTahun('data_cp')); if (scp) setDaftarCp(JSON.parse(scp))
+      const smt = localStorage.getItem(kunciTahun('data_materi')); if (smt) setDaftarMateri(JSON.parse(smt))
+      const stp = localStorage.getItem(kunciTahun('data_tp')); if (stp) setDaftarTp(JSON.parse(stp))
+      const satp = localStorage.getItem(kunciTahun('data_atp')); if (satp) setDaftarAtp(JSON.parse(satp))
 
       setLoading(false)
     }
@@ -793,10 +807,14 @@ export default function CpTpAtpPage() {
             <div>
               <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">Mata Pelajaran</label>
               <select value={filterMapelId} onChange={e => setFilterMapelId(e.target.value)}
-                className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
+                disabled={!!cakupanGuru && daftarMapelTampil.length <= 1}
+                className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white disabled:bg-slate-50 disabled:text-slate-500">
                 <option value="">-- Pilih Mapel --</option>
-                {daftarMapel.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
+                {daftarMapelTampil.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
               </select>
+              {cakupanGuru && (
+                <p className="text-[9px] text-slate-400 mt-1">Anda hanya bisa mengelola mata pelajaran yang Anda ampu.</p>
+              )}
             </div>
             <div>
               <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">Fase</label>
@@ -867,6 +885,7 @@ export default function CpTpAtpPage() {
 
         {/* ══════════════════ TAB CP ══════════════════ */}
         {tabUtama === 'cp' && (
+          <fieldset disabled={!bolehEdit} className="space-y-8 border-0 p-0 m-0 min-w-0">
           <section className="space-y-8">
 
             {/* ── CAPAIAN PEMBELAJARAN SECARA UMUM ── */}
@@ -891,7 +910,7 @@ export default function CpTpAtpPage() {
                       <select value={formCpUmum.mapelId||''} onChange={e => setFormCpUmum({...formCpUmum, mapelId: e.target.value})}
                         className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-slate-500 bg-white">
                         <option value="">-- Pilih --</option>
-                        {daftarMapel.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
+                        {daftarMapelTampil.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
                       </select>
                     </div>
                     <div>
@@ -975,7 +994,7 @@ export default function CpTpAtpPage() {
                       <select value={formCp.mapelId||''} onChange={e => setFormCp({...formCp, mapelId: e.target.value})}
                         className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
                         <option value="">-- Pilih --</option>
-                        {daftarMapel.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
+                        {daftarMapelTampil.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
                       </select>
                     </div>
                     <div>
@@ -1049,10 +1068,12 @@ export default function CpTpAtpPage() {
               </div>
             </div>
           </section>
+          </fieldset>
         )}
 
         {/* ══════════════════ TAB MATERI ══════════════════ */}
         {tabUtama === 'materi' && (
+          <fieldset disabled={!bolehEdit} className="space-y-4 border-0 p-0 m-0 min-w-0">
           <section className="space-y-4">
             <div className="flex justify-between items-center">
               <div>
@@ -1166,10 +1187,12 @@ export default function CpTpAtpPage() {
               })}
             </div>
           </section>
+          </fieldset>
         )}
 
         {/* ══════════════════ TAB TP ══════════════════ */}
         {tabUtama === 'tp' && (
+          <fieldset disabled={!bolehEdit} className="space-y-4 border-0 p-0 m-0 min-w-0">
           <section className="space-y-4">
             <div className="flex justify-between items-center">
               <div>
@@ -1319,10 +1342,12 @@ export default function CpTpAtpPage() {
               })}
             </div>
           </section>
+          </fieldset>
         )}
 
         {/* ══════════════════ TAB ATP (PAPAN KELAS) ══════════════════ */}
         {tabUtama === 'atp' && (
+          <fieldset disabled={!bolehEdit} className="space-y-6 border-0 p-0 m-0 min-w-0">
           <section className="space-y-6">
             <div>
               <h2 className="text-sm font-black text-slate-800">Alur Tujuan Pembelajaran (ATP)</h2>
@@ -1458,6 +1483,7 @@ export default function CpTpAtpPage() {
               </div>
             )}
           </section>
+          </fieldset>
         )}
 
         {/* ══════════════════ TAB REKAP ══════════════════ */}

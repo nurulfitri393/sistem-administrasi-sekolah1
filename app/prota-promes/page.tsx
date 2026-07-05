@@ -43,7 +43,10 @@ import Sidebar from '@/components/Sidebar'
 import { Fragment, useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
+import { kunciTahun } from '@/lib/tahunAjaran'
+import { ambilIdentitasOtomatis } from '@/lib/identitasOtomatis'
 import { useAksesGuard } from '@/lib/useAksesGuard'
+import { bisaMengeditModul, getCakupanMengajarGuru } from '@/lib/aksesPeran'
 import {
   Home, Building, Shield, CalendarDays, Clock, BarChart2,
   BookOpen, FileSpreadsheet, LogOut, Landmark, FileText,
@@ -837,6 +840,8 @@ export default function ProtaPromesPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const diizinkanAkses = useAksesGuard('prota_promes')
+  const bolehEdit = bisaMengeditModul('prota_promes')
+  const cakupanGuru = getCakupanMengajarGuru() // null utk Admin, berisi mapelIds/guruId utk Guru
   const [namaInduk, setNamaInduk] = useState('Lembaga / Yayasan Pusat')
   const [logoInduk, setLogoInduk] = useState('')
 
@@ -897,44 +902,62 @@ export default function ProtaPromesPage() {
       const sm = localStorage.getItem('master_mapel'); if (sm) setDaftarMapel(JSON.parse(sm))
       const sr = localStorage.getItem('master_rombel'); if (sr) setDaftarRombel(JSON.parse(sr))
 
-      const scp = localStorage.getItem('data_cp'); if (scp) setDaftarCp(JSON.parse(scp))
-      const smt = localStorage.getItem('data_materi'); if (smt) setDaftarMateri(JSON.parse(smt))
-      const stp = localStorage.getItem('data_tp'); if (stp) setDaftarTp(JSON.parse(stp))
-      const satp = localStorage.getItem('data_atp'); if (satp) setDaftarAtpPeta(JSON.parse(satp))
+      const scp = localStorage.getItem(kunciTahun('data_cp')); if (scp) setDaftarCp(JSON.parse(scp))
+      const smt = localStorage.getItem(kunciTahun('data_materi')); if (smt) setDaftarMateri(JSON.parse(smt))
+      const stp = localStorage.getItem(kunciTahun('data_tp')); if (stp) setDaftarTp(JSON.parse(stp))
+      const satp = localStorage.getItem(kunciTahun('data_atp')); if (satp) setDaftarAtpPeta(JSON.parse(satp))
 
-      const smj = localStorage.getItem('matriks_alokasi_rinci_samping'); if (smj) setMatriksJp(JSON.parse(smj))
-      const sj = localStorage.getItem('data_jadwal_pelajaran'); if (sj) setDaftarJadwal(JSON.parse(sj))
-      const sw = localStorage.getItem('master_pemetaan_waktu'); if (sw) setDaftarWaktu(JSON.parse(sw))
+      const smj = localStorage.getItem(kunciTahun('matriks_alokasi_rinci_samping')); if (smj) setMatriksJp(JSON.parse(smj))
+      const sj = localStorage.getItem(kunciTahun('data_jadwal_pelajaran')); if (sj) setDaftarJadwal(JSON.parse(sj))
+      const sw = localStorage.getItem(kunciTahun('master_pemetaan_waktu')); if (sw) setDaftarWaktu(JSON.parse(sw))
 
-      const sk = localStorage.getItem('kaldik_agenda_list') || localStorage.getItem('data_kaldik_events')
+      const sk = localStorage.getItem(kunciTahun('kaldik_agenda_list')) || localStorage.getItem(kunciTahun('data_kaldik_events'))
       if (sk) setEventsKaldik(JSON.parse(sk))
 
-      const sgs = localStorage.getItem('setting_semester_ganjil'); if (sgs) setSemesterGanjil(JSON.parse(sgs))
-      const sge = localStorage.getItem('setting_semester_genap'); if (sge) setSemesterGenap(JSON.parse(sge))
+      const sgs = localStorage.getItem(kunciTahun('setting_semester_ganjil')); if (sgs) setSemesterGanjil(JSON.parse(sgs))
+      const sge = localStorage.getItem(kunciTahun('setting_semester_genap')); if (sge) setSemesterGenap(JSON.parse(sge))
 
       setProfil(prev => ({
         ...prev,
         namaSekolah: localStorage.getItem('nama_sekolah') || prev.namaSekolah,
         kota: localStorage.getItem('profil_kota') || '',
-        namaKepala: localStorage.getItem('profil_kepala') || '',
-        nip: localStorage.getItem('profil_nip') || '',
-        nuptk: localStorage.getItem('profil_nuptk') || '',
         alamat: localStorage.getItem('profil_alamat') || prev.alamat,
         titiMangsa: localStorage.getItem('profil_titi_mangsa') || '',
+        // namaKepala/nip/nuptk TIDAK diisi manual lagi -- dihitung otomatis
+        // di effect terpisah di bawah (mengikuti guru/unit yang dipilih).
       }))
 
       setLoading(false)
+
+      // Kalau yang login adalah Guru (bukan Admin), kunci filter Guru ke
+      // dirinya sendiri -- tidak bisa memilih/lihat data guru lain sama sekali.
+      const cakupan = getCakupanMengajarGuru()
+      if (cakupan?.guruId) {
+        setFilterGuruId(cakupan.guruId)
+      }
     }
     init()
   }, [router])
 
+  // Kepala Sekolah/Mudir dideteksi OTOMATIS dari Identitas Lembaga & Kelola
+  // Data Guru -- mengikuti unit tempat guru yang sedang difilter bertugas.
+  // Tidak ada lagi input manual nama Kepala Sekolah di halaman ini.
+  useEffect(() => {
+    const identitas = ambilIdentitasOtomatis()
+    if (!identitas) return
+
+    const guruTerpilih = daftarGuru.find((g: any) => g.id === filterGuruId)
+    const unitIdGuru = guruTerpilih?.unitIds?.[0]
+    const unitData = unitIdGuru ? identitas.unitList.find(u => u.id === unitIdGuru) : undefined
+
+    setProfil(prev => ({
+      ...prev,
+      namaKepala: unitData?.namaKepala || identitas.namaMudir || '',
+      nip: unitData?.nipKepala || identitas.nipMudir || '',
+    }))
+  }, [filterGuruId, daftarGuru])
+
   function simpanProfil() {
-    localStorage.setItem('nama_sekolah', profil.namaSekolah)
-    localStorage.setItem('profil_alamat', profil.alamat)
-    localStorage.setItem('profil_kota', profil.kota)
-    localStorage.setItem('profil_kepala', profil.namaKepala)
-    localStorage.setItem('profil_nip', profil.nip)
-    localStorage.setItem('profil_nuptk', profil.nuptk || '')
     localStorage.setItem('profil_titi_mangsa', profil.titiMangsa || '')
     setEditProfil(false)
   }
@@ -1277,39 +1300,14 @@ export default function ProtaPromesPage() {
           </div>
           {editProfil && (
             <div className="px-6 py-5 space-y-4 border-t border-slate-100">
-              <p className="text-[10px] text-slate-500">Data ini disimpan ke localStorage dan digunakan untuk kop &amp; TTD di semua dokumen cetak.</p>
+              <p className="text-[10px] text-slate-500">Nama lembaga, alamat, dan Kepala Sekolah diambil <strong>otomatis</strong> dari menu Identitas Lembaga &amp; Kelola Data Guru (mengikuti unit tempat guru yang dipilih bertugas) — tidak bisa diubah manual di sini. Hanya Titi Mangsa yang bisa disesuaikan.</p>
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1 text-[11px]">
+                <p><span className="font-bold text-slate-600">Satuan Pendidikan:</span> {profil.namaSekolah || '—'}</p>
+                <p><span className="font-bold text-slate-600">Kota:</span> {profil.kota || '—'}</p>
+                <p><span className="font-bold text-slate-600">Alamat:</span> {profil.alamat || '—'}</p>
+                <p><span className="font-bold text-slate-600">Kepala Sekolah:</span> {profil.namaKepala || 'Belum diatur di Kelola Data Guru'}{profil.nip ? ` / NUPTK: ${profil.nip}` : ''}</p>
+              </div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Nama Satuan Pendidikan</label>
-                  <input type="text" value={profil.namaSekolah} onChange={e => setProfil(p => ({ ...p, namaSekolah: e.target.value }))}
-                    placeholder="Contoh: SMP 'Aisyiyah Boarding School Bandung"
-                    className="w-full px-3 py-2 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#6A197D]" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Kota / Kabupaten <span className="text-red-500">*</span></label>
-                  <input type="text" value={profil.kota} onChange={e => setProfil(p => ({ ...p, kota: e.target.value }))}
-                    placeholder="Contoh: Bandung"
-                    className="w-full px-3 py-2 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#6A197D]" />
-                  <p className="text-[9px] text-slate-400 mt-0.5">Untuk titi mangsa pada dokumen cetak</p>
-                </div>
-                <div className="col-span-2">
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Alamat Lembaga</label>
-                  <input type="text" value={profil.alamat} onChange={e => setProfil(p => ({ ...p, alamat: e.target.value }))}
-                    placeholder="Contoh: Jl. Soekarno Hatta No. 1, Bandung"
-                    className="w-full px-3 py-2 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#6A197D]" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Nama Kepala Sekolah <span className="text-red-500">*</span></label>
-                  <input type="text" value={profil.namaKepala} onChange={e => setProfil(p => ({ ...p, namaKepala: e.target.value }))}
-                    placeholder="Contoh: Drs. H. Ahmad Fauzi, M.Pd."
-                    className="w-full px-3 py-2 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#6A197D]" />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">NUPTK Kepala Sekolah</label>
-                  <input type="text" value={profil.nip} onChange={e => setProfil(p => ({ ...p, nip: e.target.value }))}
-                    placeholder="Contoh: 0634770671230152"
-                    className="w-full px-3 py-2 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#6A197D]" />
-                </div>
                 <div className="col-span-2">
                   <label className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Titi Mangsa (Tempat, Tanggal Penandatanganan)</label>
                   <div className="flex gap-2">
@@ -1328,7 +1326,7 @@ export default function ProtaPromesPage() {
               </div>
               <button onClick={simpanProfil}
                 className="w-full py-2.5 rounded-xl text-sm font-bold bg-[#6A197D] hover:bg-[#57146a] text-white transition">
-                Simpan Profil Lembaga
+                Simpan Titi Mangsa
               </button>
             </div>
           )}
@@ -1346,11 +1344,17 @@ export default function ProtaPromesPage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Guru</label>
-              <select value={filterGuruId} onChange={e => setFilterGuruId(e.target.value)}
-                className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-[#6A197D]">
-                <option value="">-- Pilih Guru --</option>
-                {daftarGuru.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
-              </select>
+              {cakupanGuru ? (
+                <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-slate-50 font-semibold text-slate-600">
+                  {guruTerpilih?.nama || 'Anda'} <span className="text-[9px] font-normal text-slate-400">(akun Anda)</span>
+                </div>
+              ) : (
+                <select value={filterGuruId} onChange={e => setFilterGuruId(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-[#6A197D]">
+                  <option value="">-- Pilih Guru --</option>
+                  {daftarGuru.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                </select>
+              )}
             </div>
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Mata Pelajaran</label>
@@ -1569,6 +1573,11 @@ export default function ProtaPromesPage() {
           <div className="flex items-center gap-2 px-6 py-4 border-b border-slate-100">
             <Eye className="w-4 h-4 text-[#6A197D]" />
             <h2 className="text-sm font-bold text-slate-800">Preview Dokumen</h2>
+            {!bolehEdit && (
+              <span className="ml-auto text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
+                Mode Lihat Saja — gunakan tombol Unduh PDF/Excel di atas
+              </span>
+            )}
           </div>
 
           <div className="flex bg-slate-50 border-b border-slate-200 px-4 pt-2 gap-1">
@@ -1584,7 +1593,7 @@ export default function ProtaPromesPage() {
             ))}
           </div>
 
-          <div className="p-6">
+          <fieldset disabled={!bolehEdit} className="p-6 border-0 m-0 min-w-0">
             {filterGuruId && filterMapelId && filterRombelId && (
               <div className="mb-4 p-4 border border-slate-200 rounded-xl bg-slate-50 text-[10px] space-y-1">
                 <div className="text-center font-black text-sm text-slate-800">
@@ -1701,7 +1710,7 @@ export default function ProtaPromesPage() {
                 </div>
               </div>
             )}
-          </div>
+          </fieldset>
         </section>
 
         {/* ── CATATAN LOGIKA ── */}

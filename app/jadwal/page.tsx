@@ -5,6 +5,7 @@ import Sidebar from '@/components/Sidebar'
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
+import { kunciTahun } from '@/lib/tahunAjaran'
 import {
   Clock, Trash2, Landmark, LogOut, Shield, BookOpen, CheckCircle,
   Building, CalendarDays, BarChart2, FileText, FileSpreadsheet, Home,
@@ -798,16 +799,16 @@ export default function JadwalPelajaranPage() {
       load('matriks_alokasi_rinci_samping', setMatriksRinciJp, {})
       load('request_hari_jp_guru', setRequestHariJp, {})
 
-      const storedSemester = localStorage.getItem('jadwal_semester_aktif')
+      const storedSemester = localStorage.getItem(kunciTahun('jadwal_semester_aktif'))
       if (storedSemester) setSemesterAktif(storedSemester)
 
-      const storedTtd = localStorage.getItem('jadwal_titimangsa_ttd')
+      const storedTtd = localStorage.getItem(kunciTahun('jadwal_titimangsa_ttd'))
       if (storedTtd) setTtd(JSON.parse(storedTtd))
 
-      const storedKetUnit = localStorage.getItem('jadwal_keterangan_unit')
+      const storedKetUnit = localStorage.getItem(kunciTahun('jadwal_keterangan_unit'))
       if (storedKetUnit) setKeteranganUnit(JSON.parse(storedKetUnit))
 
-      const mj = localStorage.getItem('master_maks_jp_guru_per_hari')
+      const mj = localStorage.getItem(kunciTahun('master_maks_jp_guru_per_hari'))
       if (mj) setMaksJpGuruPerHari(Number(mj) || 10)
 
       setLoading(false)
@@ -2075,54 +2076,13 @@ export default function JadwalPelajaranPage() {
                     <h2 className="text-xs font-black text-slate-700">Identitas & Kop — Lembaga Pusat</h2>
                   </div>
                   <p className="text-[10px] text-slate-500 leading-relaxed">
-                    Data ini tampil pada bagian kop (kepala surat) hasil unduhan jadwal <strong>keseluruhan</strong> dan <strong>per unit</strong>. Jadwal per guru tidak memakai kop. Untuk unduhan jadwal keseluruhan, baris nama menampilkan nama Lembaga Pusat; untuk unduhan jadwal unit, baris nama otomatis berganti menjadi nama unit terkait (nama Lembaga Pusat tidak ditulis ulang).
+                    Data ini tampil pada bagian kop (kepala surat) hasil unduhan jadwal <strong>keseluruhan</strong> dan <strong>per unit</strong>. Diambil <strong>otomatis</strong> dari menu <a href="/lembaga" className="underline font-bold text-[#571466]">Identitas Lembaga</a> — tidak bisa diubah manual di sini. Yang bisa diatur di sini hanya pilihan logo kiri/kanan untuk kop jadwal keseluruhan.
                   </p>
 
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Keterangan Lengkap Yayasan</label>
-                    <textarea
-                      rows={2}
-                      placeholder={'Cth baris 1: MAJLIS PENDIDIKAN DASAR DAN MENENGAH\nCth baris 2: \'AISYIYAH BOARDING SCHOOL BANDUNG'}
-                      value={identitasInduk.kop || ''}
-                      onChange={e => updateIdentitasIndukField('kop', e.target.value)}
-                      className="w-full px-4 py-2.5 border rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#8A2FA0] resize-none"
-                    />
-                    <p className="text-[9px] text-slate-400 mt-1">Bisa diisi 2 baris (tekan Enter untuk baris baru) — ini baris paling atas pada kop, bukan tautan/URL.</p>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Nama Lembaga Pusat</label>
-                    <input
-                      type="text"
-                      placeholder="Cth: SMP Aisyiyah Boarding School"
-                      value={identitasInduk.nama || ''}
-                      onChange={e => updateIdentitasIndukField('nama', e.target.value)}
-                      className="w-full px-4 py-2.5 border rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#8A2FA0]"
-                    />
-                    <p className="text-[9px] text-slate-400 mt-1">Tampil sebagai baris nama (di bawah Keterangan Lengkap Yayasan) hanya saat mengunduh jadwal keseluruhan.</p>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Alamat Lembaga Pusat</label>
-                    <input
-                      type="text"
-                      placeholder="Cth: Jl. Contoh No. 1, Bandung"
-                      value={identitasInduk.alamat || ''}
-                      onChange={e => updateIdentitasIndukField('alamat', e.target.value)}
-                      className="w-full px-4 py-2.5 border rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#8A2FA0]"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">URL Logo</label>
-                    <input
-                      type="text"
-                      placeholder="https://..."
-                      value={identitasInduk.logo_utama || identitasInduk.logo || ''}
-                      onChange={e => updateIdentitasIndukField('logo_utama', e.target.value)}
-                      className="w-full px-4 py-2.5 border rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#8A2FA0]"
-                    />
-                    <p className="text-[9px] text-slate-400 mt-1">Kolom ini khusus untuk gambar logo — bukan untuk diisi di kolom keterangan yayasan.</p>
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1 text-[11px]">
+                    <p className="whitespace-pre-line"><span className="font-bold text-slate-600">Keterangan Yayasan:</span> {identitasInduk.kop || '—'}</p>
+                    <p><span className="font-bold text-slate-600">Nama Lembaga Pusat:</span> {identitasInduk.nama || '—'}</p>
+                    <p><span className="font-bold text-slate-600">Alamat:</span> {identitasInduk.alamat || '—'}</p>
                   </div>
 
                   <div className="bg-[#F7ECFA]/50 border border-[#F0DFF5] rounded-xl p-3 space-y-3">
