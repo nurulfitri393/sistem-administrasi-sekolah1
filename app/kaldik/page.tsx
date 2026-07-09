@@ -320,9 +320,9 @@ async function buatDokumenPDF(params: ParamsPDF) {
     const nextY=monthNum===12?year+1:year
 
     // Header nama bulan
-    doc.setFillColor(...NAVY)
+    doc.setFillColor(...NAVY_LIGHT)
     doc.rect(x,y,COL_W,monthHdrH,'F')
-    doc.setFont('times','bold');doc.setFontSize(filterSemester==='semua'?6.3:7);doc.setTextColor(255,255,255)
+    doc.setFont('times','bold');doc.setFontSize(filterSemester==='semua'?6.3:7);doc.setTextColor(...NAVY)
     doc.text(bulanNama,x+COL_W/2,y+monthHdrH-1.4,{align:'center'})
     y+=monthHdrH
 
@@ -453,11 +453,10 @@ async function buatDokumenPDF(params: ParamsPDF) {
     const ttX=PW-MR-75; let sy=yTop+7
     doc.setFont('times','normal');doc.setFontSize(9);doc.setTextColor(...DARK)
     doc.text(titiMangsa||titiMangsaHariIni('Bandung'),ttX,sy);sy+=5.5
-    doc.text(scope==='keseluruhan'?`Mudir ${namaInstitusi}`:`${jabatanPenandatangan}`,ttX,sy);sy+=16
-    doc.setLineWidth(0.3);doc.setDrawColor(185,165,190);doc.line(ttX,sy,ttX+70,sy);sy+=5
+    doc.text(scope==='keseluruhan'?`Mudir ${namaInstitusi}`:`${jabatanPenandatangan}`,ttX,sy);sy+=21
     doc.setFont('times','bold');doc.setFontSize(9.5)
     doc.text(namaPenandatangan||`(${jabatanPenandatangan})`,ttX,sy)
-    if(scope!=='keseluruhan'&&nipPenandatangan){sy+=5;doc.setFont('times','normal');doc.setFontSize(8.5);doc.text(`NUPTK. ${nipPenandatangan}`,ttX,sy)}
+    if(scope!=='keseluruhan'){sy+=5;doc.setFont('times','normal');doc.setFontSize(8.5);doc.text(`NUPTK. ${nipPenandatangan||'-'}`,ttX,sy)}
   }
 
   // ── Susun daftar bulan yang akan dicetak ────────────────────────────────
@@ -569,14 +568,14 @@ function CetakKaldikModal({onClose,namaSekolah,tahunAjaran,daftarAgenda,daftarUn
       nipMudir:    identitas?.nipMudir || localStorage.getItem('profil_nip_mudir')||localStorage.getItem('nip_mudir')||'',
       namaKepala:  unitData?.namaKepala || localStorage.getItem('profil_kepala')||localStorage.getItem('nama_kepala')||'',
       nipKepala:   unitData?.nipKepala || localStorage.getItem('profil_nip')||localStorage.getItem('nip_kepala')||'',
-      titiMangsa:  localStorage.getItem('profil_titimangsa')||'',
+      titiMangsa:  localStorage.getItem('profil_titi_mangsa')||'',
     })
   },[namaSekolah,selectedUnitId,scope])
 
   useEffect(()=>{return()=>{if(previewRef.current) URL.revokeObjectURL(previewRef.current)}},[])
 
   function simpanProfil() {
-    localStorage.setItem('profil_titimangsa',profil.titiMangsa)
+    localStorage.setItem('profil_titi_mangsa',profil.titiMangsa)
     setEditProfil(false)
   }
 
@@ -969,7 +968,7 @@ export default function KaldikPage() {
   if (diizinkanAkses === false) return null
 
   return (
-    <div className="flex min-h-screen bg-gray-50" style={{fontFamily:"'Open Sans', sans-serif"}}>
+    <div className="flex flex-col md:flex-row min-h-screen bg-gray-50" style={{fontFamily:"'Open Sans', sans-serif"}}>
       <style jsx global>{`
         @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Open+Sans:wght@400;500;600&display=swap');
         /* Font Tipis (reguler/label biasa) — Open Sans */

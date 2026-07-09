@@ -156,7 +156,7 @@ export default function PembagianPeranPage() {
   if (diizinkanAkses === false) return null
 
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-800 font-opensans">
+    <div className="flex flex-col md:flex-row min-h-screen bg-slate-50 text-slate-800 font-opensans">
       
       {/* SIDEBAR NAVIGASI */}
       <Sidebar />

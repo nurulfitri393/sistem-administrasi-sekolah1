@@ -231,7 +231,7 @@ export default function DashboardPage() {
   if (loading) return <div className="p-8 text-center font-semibold text-[#6A197D]">Memuat Sistem Dasbor...</div>
 
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-800 font-opensans">
+    <div className="flex flex-col md:flex-row min-h-screen bg-slate-50 text-slate-800 font-opensans">
       
       {/* SIDEBAR NAVIGASI STICKY */}
       <Sidebar />

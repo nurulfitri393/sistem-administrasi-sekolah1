@@ -42,6 +42,7 @@ export default function JadwalPelajaranPage() {
   const [waktuMulai, setWaktuMulai] = useState('07.30')
   const [waktuSelesai, setWaktuSelesai] = useState('08.10')
   const [jenisWaktu, setJenisWaktu] = useState<'mapel' | 'istirahat'>('mapel')
+  const [editWaktuId, setEditWaktuId] = useState<string | null>(null)
 
   // State Fitur Cari Guru & Rekap
   const [cariGuruId, setCariGuruId] = useState('')
@@ -59,6 +60,7 @@ export default function JadwalPelajaranPage() {
   const [formGabunganGuruId, setFormGabunganGuruId] = useState('')
   const [formGabunganRombelIds, setFormGabunganRombelIds] = useState<string[]>([])
   const [formGabunganKeterangan, setFormGabunganKeterangan] = useState('')
+  const [editKelasGabunganId, setEditKelasGabunganId] = useState<string | null>(null)
 
   // Maksimal JP Guru per Hari (default 10, bisa diatur)
   const [maksJpGuruPerHari, setMaksJpGuruPerHari] = useState(10)
@@ -149,18 +151,43 @@ export default function JadwalPelajaranPage() {
   // --- CRUD MASTER PEMETAAN WAKTU ---
   const handleSimpanWaktu = (e: React.FormEvent) => {
     e.preventDefault()
-    const newWaktu = {
-      id: 'waktu-' + Date.now(),
-      label: labelWaktu || (jenisWaktu === 'mapel' ? `Jam ke-${jamKeNomor}` : 'Istirahat'),
-      jamKe: jamKeNomor,
-      mulai: waktuMulai,
-      selesai: waktuSelesai,
-      jenis: jenisWaktu
+    let updated
+    if (editWaktuId) {
+      updated = daftarWaktu.map((item: any) => item.id === editWaktuId ? {
+        ...item,
+        label: labelWaktu || (jenisWaktu === 'mapel' ? `Jam ke-${jamKeNomor}` : 'Istirahat'),
+        jamKe: jamKeNomor,
+        mulai: waktuMulai,
+        selesai: waktuSelesai,
+        jenis: jenisWaktu,
+      } : item)
+    } else {
+      const newWaktu = {
+        id: 'waktu-' + Date.now(),
+        label: labelWaktu || (jenisWaktu === 'mapel' ? `Jam ke-${jamKeNomor}` : 'Istirahat'),
+        jamKe: jamKeNomor,
+        mulai: waktuMulai,
+        selesai: waktuSelesai,
+        jenis: jenisWaktu
+      }
+      updated = [...daftarWaktu, newWaktu]
     }
-    const updated = [...daftarWaktu, newWaktu]
     setDaftarWaktu(updated)
     localStorage.setItem(kunciTahun('master_pemetaan_waktu'), JSON.stringify(updated))
-    setLabelWaktu('')
+    setLabelWaktu(''); setEditWaktuId(null); setJamKeNomor('1'); setWaktuMulai('07.30'); setWaktuSelesai('08.10'); setJenisWaktu('mapel')
+  }
+
+  const handleEditWaktuClick = (w: any) => {
+    setEditWaktuId(w.id)
+    setJenisWaktu(w.jenis)
+    setJamKeNomor(String(w.jamKe || '1'))
+    setLabelWaktu(w.label || '')
+    setWaktuMulai(w.mulai)
+    setWaktuSelesai(w.selesai)
+  }
+
+  const handleBatalEditWaktu = () => {
+    setEditWaktuId(null); setLabelWaktu(''); setJamKeNomor('1'); setWaktuMulai('07.30'); setWaktuSelesai('08.10'); setJenisWaktu('mapel')
   }
 
   const handleHapusWaktu = (id: string) => {
@@ -257,16 +284,44 @@ export default function JadwalPelajaranPage() {
         alert('Pilih mata pelajaran dan minimal 2 rombel/kelas yang akan digabungkan.')
         return
      }
-     const newGabungan = {
-        id: 'gabung-' + Date.now(),
-        mapelId: formGabunganMapelId,
-        guruId: formGabunganGuruId || null,
-        rombelIds: formGabunganRombelIds,
-        keterangan: formGabunganKeterangan
+     let updated
+     if (editKelasGabunganId) {
+        updated = daftarKelasGabungan.map((item: any) => item.id === editKelasGabunganId ? {
+           ...item,
+           mapelId: formGabunganMapelId,
+           guruId: formGabunganGuruId || null,
+           rombelIds: formGabunganRombelIds,
+           keterangan: formGabunganKeterangan,
+        } : item)
+     } else {
+        const newGabungan = {
+           id: 'gabung-' + Date.now(),
+           mapelId: formGabunganMapelId,
+           guruId: formGabunganGuruId || null,
+           rombelIds: formGabunganRombelIds,
+           keterangan: formGabunganKeterangan
+        }
+        updated = [...daftarKelasGabungan, newGabungan]
      }
-     const updated = [...daftarKelasGabungan, newGabungan]
      setDaftarKelasGabungan(updated)
      localStorage.setItem(kunciTahun('master_kelas_gabungan'), JSON.stringify(updated))
+     setFormGabunganMapelId('')
+     setFormGabunganGuruId('')
+     setFormGabunganRombelIds([])
+     setFormGabunganKeterangan('')
+     setEditKelasGabunganId(null)
+  }
+
+  const handleEditKelasGabunganClick = (kg: any) => {
+     setEditKelasGabunganId(kg.id)
+     setFormGabunganMapelId(kg.mapelId || '')
+     setFormGabunganGuruId(kg.guruId || '')
+     setFormGabunganRombelIds(kg.rombelIds || [])
+     setFormGabunganKeterangan(kg.keterangan || '')
+  }
+
+  const handleBatalEditKelasGabungan = () => {
+     setEditKelasGabunganId(null)
      setFormGabunganMapelId('')
      setFormGabunganGuruId('')
      setFormGabunganRombelIds([])
@@ -737,7 +792,7 @@ export default function JadwalPelajaranPage() {
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-800">
+    <div className="flex flex-col md:flex-row min-h-screen bg-slate-50 text-slate-800">
       
       {/* --- SIDEBAR --- */}
       <Sidebar />
@@ -833,7 +888,14 @@ export default function JadwalPelajaranPage() {
                    </div>
                 </div>
 
-                <button type="submit" className="w-full bg-[#6A197D] text-white py-3 rounded-xl font-bold text-xs shadow-md hover:bg-[#571466] transition mt-6">+ Tambahkan Master Waktu</button>
+                <div className="flex gap-2 mt-6">
+                  <button type="submit" className="flex-1 bg-[#6A197D] text-white py-3 rounded-xl font-bold text-xs shadow-md hover:bg-[#571466] transition">
+                    {editWaktuId ? 'Simpan Perubahan' : '+ Tambahkan Master Waktu'}
+                  </button>
+                  {editWaktuId && (
+                    <button type="button" onClick={handleBatalEditWaktu} className="px-4 bg-slate-100 rounded-xl font-bold text-slate-600 text-xs">Batal</button>
+                  )}
+                </div>
              </form>
              ) : (
                <div className="xl:col-span-1 border-r border-slate-100 pr-0 xl:pr-6">
@@ -864,6 +926,7 @@ export default function JadwalPelajaranPage() {
                               <td className="p-3 font-bold">{w.label}</td>
                               <td className="p-3 font-extrabold text-[#6A197D] tracking-wider">{w.mulai} - {w.selesai}</td>
                               <td className="p-3 text-center">
+                                 <button onClick={() => handleEditWaktuClick(w)} className="p-1.5 text-[#8A2FA0] hover:text-[#571466] rounded-lg transition"><Edit2 className="w-4 h-4" /></button>
                                  <button onClick={() => handleHapusWaktu(w.id)} className="p-1.5 text-slate-400 hover:text-red-500 rounded-lg transition"><Trash2 className="w-4 h-4" /></button>
                               </td>
                            </tr>
@@ -927,9 +990,14 @@ export default function JadwalPelajaranPage() {
                    <input type="text" placeholder="Cth: Gabung karena jumlah siswa sedikit" value={formGabunganKeterangan} onChange={e => setFormGabunganKeterangan(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
 
-                <button type="submit" className="w-full bg-emerald-600 text-white py-3 rounded-xl font-bold text-xs shadow-md hover:bg-emerald-700 transition mt-2 flex items-center justify-center gap-2">
-                   <Plus className="w-4 h-4" /> Daftarkan Kelas Gabungan
-                </button>
+                <div className="flex gap-2 mt-2">
+                  <button type="submit" className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold text-xs shadow-md hover:bg-emerald-700 transition flex items-center justify-center gap-2">
+                     {editKelasGabunganId ? <><Check className="w-4 h-4" /> Simpan Perubahan</> : <><Plus className="w-4 h-4" /> Daftarkan Kelas Gabungan</>}
+                  </button>
+                  {editKelasGabunganId && (
+                    <button type="button" onClick={handleBatalEditKelasGabungan} className="px-4 bg-slate-100 rounded-xl font-bold text-slate-600 text-xs">Batal</button>
+                  )}
+                </div>
              </form>
              ) : (
                <div className="xl:col-span-1">
@@ -959,7 +1027,10 @@ export default function JadwalPelajaranPage() {
                               </div>
                               {kg.keterangan && <p className="text-[10px] text-slate-400 font-medium pt-1">{kg.keterangan}</p>}
                            </div>
-                           <button onClick={() => handleHapusKelasGabungan(kg.id)} className="p-2 text-slate-400 hover:text-red-500 rounded-lg transition shrink-0"><Trash2 className="w-4 h-4" /></button>
+                           <div className="flex items-center gap-1 shrink-0">
+                              <button onClick={() => handleEditKelasGabunganClick(kg)} className="p-2 text-slate-400 hover:text-[#6A197D] rounded-lg transition"><Edit2 className="w-4 h-4" /></button>
+                              <button onClick={() => handleHapusKelasGabungan(kg.id)} className="p-2 text-slate-400 hover:text-red-500 rounded-lg transition"><Trash2 className="w-4 h-4" /></button>
+                           </div>
                         </div>
                       )
                    })}

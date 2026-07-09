@@ -1,18 +1,20 @@
 'use client'
 import { useAksesGuard } from '@/lib/useAksesGuard'
-import { bisaMengeditModul } from '@/lib/aksesPeran'
+import { bisaMengeditModul, getCakupanMengajarGuru } from '@/lib/aksesPeran'
 import CatatanHanyaLihat from '@/components/CatatanHanyaLihat'
 
 import Sidebar from '@/components/Sidebar'
-import { useEffect, useState, useMemo } from 'react'
+import PratinjauPdfModal from '@/components/PratinjauPdfModal'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
-import { kunciTahun } from '@/lib/tahunAjaran'
+import { kunciTahun, getTahunAjaranAktifNama } from '@/lib/tahunAjaran'
+import { ambilIdentitasOtomatis } from '@/lib/identitasOtomatis'
 import {
   Landmark, LogOut, Shield, BookOpen, Home, Building,
   CalendarDays, BarChart2, FileText, FileSpreadsheet, Clock,
   Download, ChevronDown, ChevronRight, AlertTriangle, CheckCircle2,
-  Calculator, Calendar, BookMarked
+  Calculator, Calendar, BookMarked, Eye
 } from 'lucide-react'
 
 // ============================================================
@@ -42,6 +44,36 @@ type SemesterInfo = {
 
 // Cakupan perhitungan minggu efektif LEMBAGA
 type ScopeLevel = 'pusat' | 'unit' | 'kelas'
+
+/**
+ * Kaldik tidak menyimpan tanggal awal/akhir semester secara eksplisit
+ * (hanya konvensi Semester 1 = Juli-Desember, Semester 2 = Januari-Juni),
+ * jadi rentang tanggal di sini tetap diisi manual -- tapi divalidasi di
+ * sini supaya tidak salah tahun/terbalik seperti yang pernah terjadi
+ * (mis. Tahun Ajaran 2026/2027 tapi tanggal masih tahun 2025).
+ */
+function peringatanTanggal(sem: SemesterInfo, jenis: 'ganjil' | 'genap', tahunAjaranAktif: string): string | null {
+  if (!sem.tanggalMulai || !sem.tanggalSelesai) return 'Tanggal mulai/selesai belum diisi.'
+  const mulai = new Date(sem.tanggalMulai)
+  const selesai = new Date(sem.tanggalSelesai)
+  if (isNaN(mulai.getTime()) || isNaN(selesai.getTime())) return null
+  if (mulai > selesai) return 'Tanggal mulai tidak boleh setelah tanggal selesai.'
+
+  const cocok = tahunAjaranAktif.match(/(\d{4})\s*\/\s*(\d{4})/)
+  if (!cocok) return null
+  const [, thnAwal, thnAkhir] = cocok
+
+  if (jenis === 'ganjil') {
+    if (mulai.getFullYear().toString() !== thnAwal || selesai.getFullYear().toString() !== thnAwal) {
+      return `Semester Ganjil untuk Tahun Ajaran ${tahunAjaranAktif} seharusnya berada di tahun ${thnAwal} (Juli–Desember), sesuai Kaldik.`
+    }
+  } else {
+    if (mulai.getFullYear().toString() !== thnAkhir || selesai.getFullYear().toString() !== thnAkhir) {
+      return `Semester Genap untuk Tahun Ajaran ${tahunAjaranAktif} seharusnya berada di tahun ${thnAkhir} (Januari–Juni), sesuai Kaldik.`
+    }
+  }
+  return null
+}
 
 type DetailMinggu = {
   minggu: string
@@ -337,6 +369,8 @@ function KartuPerhitunganMingguJam({
   showDownload,
   onDownloadGanjil,
   onDownloadGenap,
+  onPreviewGanjil,
+  onPreviewGenap,
   expandDetail,
   onToggleExpand,
   footnote,
@@ -349,6 +383,8 @@ function KartuPerhitunganMingguJam({
   showDownload?: boolean
   onDownloadGanjil?: () => void
   onDownloadGenap?: () => void
+  onPreviewGanjil?: () => void
+  onPreviewGenap?: () => void
   expandDetail: boolean
   onToggleExpand: () => void
   footnote?: string
@@ -380,10 +416,22 @@ function KartuPerhitunganMingguJam({
         </div>
         {showDownload && (
           <div className="flex gap-2">
+            {onPreviewGanjil && (
+              <button onClick={onPreviewGanjil} title="Pratinjau sebelum unduh"
+                className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-xl font-bold text-xs shadow transition">
+                <Eye className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button onClick={onDownloadGanjil}
               className="flex items-center gap-1.5 bg-[#6A197D] hover:bg-[#58146A] text-white px-4 py-2 rounded-xl font-bold text-xs shadow transition">
               <Download className="w-3.5 h-3.5" /> PDF Ganjil
             </button>
+            {onPreviewGenap && (
+              <button onClick={onPreviewGenap} title="Pratinjau sebelum unduh"
+                className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-2 rounded-xl font-bold text-xs shadow transition">
+                <Eye className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button onClick={onDownloadGenap}
               className="flex items-center gap-1.5 bg-[#FFDE59] hover:bg-[#FFD22E] text-[#6A197D] px-4 py-2 rounded-xl font-bold text-xs shadow transition">
               <Download className="w-3.5 h-3.5" /> PDF Genap
@@ -518,8 +566,12 @@ function KartuPerhitunganMingguJam({
 export default function MingguEfektifPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const previewRef = useRef<string | null>(null)
+  useEffect(() => { return () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current) } }, [])
   const diizinkanAkses = useAksesGuard('minggu_efektif')
   const bolehEdit = bisaMengeditModul('minggu_efektif')
+  const cakupanGuru = getCakupanMengajarGuru() // null utk Admin, berisi mapelIds/guruId/mapelRombel utk Guru
   const [namaInduk, setNamaInduk] = useState('Lembaga / Yayasan Pusat')
   const [logoInduk, setLogoInduk] = useState('')
   const [namaSekolah, setNamaSekolah] = useState('')
@@ -560,6 +612,9 @@ export default function MingguEfektifPage() {
   const [filterRombelId, setFilterRombelId] = useState('')
   const [expandDetail, setExpandDetail] = useState(false)
   const [expandDetailMapel, setExpandDetailMapel] = useState(false)
+  // Tahun ajaran TIDAK diketik manual di sini -- selalu mengikuti Tahun
+  // Ajaran Aktif yang diatur di menu Beranda Dasbor (data pusat).
+  const [tahunAjaranAktif, setTahunAjaranAktif] = useState('')
 
   useEffect(() => {
     async function init() {
@@ -575,6 +630,10 @@ export default function MingguEfektifPage() {
       }
 
       const sg = localStorage.getItem('master_guru'); if (sg) setDaftarGuru(JSON.parse(sg))
+
+      // Kalau yang login adalah Guru, kunci ke akunnya sendiri -- tidak bisa
+      // melihat/pilih data guru lain sama sekali.
+      if (cakupanGuru?.guruId) setFilterGuruId(cakupanGuru.guruId)
       const sm = localStorage.getItem('master_mapel'); if (sm) setDaftarMapel(JSON.parse(sm))
       const sr = localStorage.getItem('master_rombel'); if (sr) setDaftarRombel(JSON.parse(sr))
       const st = localStorage.getItem('master_tingkat'); if (st) setDaftarTingkat(JSON.parse(st))
@@ -588,8 +647,23 @@ export default function MingguEfektifPage() {
       if (ska) { try { setDaftarAgenda(JSON.parse(ska)) } catch { /* abaikan */ } }
 
       // Load semester setting
-      const sgs = localStorage.getItem(kunciTahun('setting_semester_ganjil')); if (sgs) setSemesterGanjil(JSON.parse(sgs))
-      const sge = localStorage.getItem(kunciTahun('setting_semester_genap')); if (sge) setSemesterGenap(JSON.parse(sge))
+      const namaTaAktif = getTahunAjaranAktifNama()
+      setTahunAjaranAktif(namaTaAktif)
+
+      const sgs = localStorage.getItem(kunciTahun('setting_semester_ganjil'))
+      if (sgs) {
+        const parsed = JSON.parse(sgs)
+        setSemesterGanjil({ ...parsed, tahunAjaran: namaTaAktif })
+      } else if (namaTaAktif) {
+        setSemesterGanjil(prev => ({ ...prev, tahunAjaran: namaTaAktif }))
+      }
+      const sge = localStorage.getItem(kunciTahun('setting_semester_genap'))
+      if (sge) {
+        const parsed = JSON.parse(sge)
+        setSemesterGenap({ ...parsed, tahunAjaran: namaTaAktif })
+      } else if (namaTaAktif) {
+        setSemesterGenap(prev => ({ ...prev, tahunAjaran: namaTaAktif }))
+      }
 
       setLoading(false)
     }
@@ -616,6 +690,55 @@ export default function MingguEfektifPage() {
     const t = daftarTingkat.find((tt: any) => tt.id === rombel.tingkatId)
     return t?.lembagaId || ''
   }
+
+  // Unit yang sedang jadi acuan cakupan (dari selector "Lembaga (Pusat)/Unit/Kelas" di atas)
+  const unitAcuanCakupan = scopeLevel === 'unit'
+    ? scopeUnitId
+    : scopeLevel === 'kelas'
+      ? resolveUnitIdRombel(daftarRombel.find((r: any) => r.id === scopeRombelId))
+      : '' // 'pusat' -> tidak difilter (semua unit)
+
+  // Rombel/Kelas yang muncul di tab "Per Mapel/Guru" HARUS mengikuti Unit yang
+  // sedang dipilih di cakupan atas -- supaya tidak salah pilih kelas dari unit lain.
+  // Kalau yang login adalah Guru, dibatasi lagi hanya kelas yang benar-benar
+  // diampu guru tsb (union rombel dari seluruh mapelRombel miliknya).
+  const daftarRombelSesuaiCakupan = useMemo(() => {
+    let list = daftarRombel
+    if (unitAcuanCakupan) list = list.filter((r: any) => resolveUnitIdRombel(r) === unitAcuanCakupan)
+    if (cakupanGuru) {
+      const rombelIdGuru = new Set<string>()
+      Object.values(cakupanGuru.mapelRombel || {}).forEach((ids: any) => (ids || []).forEach((id: string) => rombelIdGuru.add(id)))
+      list = list.filter((r: any) => rombelIdGuru.has(r.id))
+    }
+    return list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [daftarRombel, daftarTingkat, unitAcuanCakupan, cakupanGuru])
+
+  // Guru yang muncul juga HARUS mengikuti Unit yang sedang dipilih (guru yang
+  // memang ditugaskan di unit tsb, lihat unitIds di Kelola Data Guru).
+  const daftarGuruSesuaiCakupan = useMemo(() => {
+    if (!unitAcuanCakupan) return daftarGuru
+    return daftarGuru.filter((g: any) => (g.unitIds || []).includes(unitAcuanCakupan))
+  }, [daftarGuru, unitAcuanCakupan])
+
+  // Mapel yang muncul di tab "Per Mapel/Guru" -- kalau login sebagai Guru,
+  // dibatasi hanya mapel yang benar-benar diampu (tidak semua mapel sekolah).
+  const daftarMapelSesuaiCakupan = useMemo(() => {
+    if (!cakupanGuru) return daftarMapel
+    return daftarMapel.filter((m: any) => cakupanGuru.mapelIds.includes(m.id))
+  }, [daftarMapel, cakupanGuru])
+
+  // Kalau Unit cakupan diganti dan Guru/Kelas yang tadinya dipilih ternyata
+  // bukan milik unit yang baru, kosongkan lagi supaya tidak salah data.
+  useEffect(() => {
+    if (filterGuruId && !daftarGuruSesuaiCakupan.some((g: any) => g.id === filterGuruId)) {
+      setFilterGuruId('')
+    }
+    if (filterRombelId && !daftarRombelSesuaiCakupan.some((r: any) => r.id === filterRombelId)) {
+      setFilterRombelId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unitAcuanCakupan])
 
   // Auto-pilih unit/kelas pertama begitu datanya tersedia, supaya selector tidak kosong
   useEffect(() => {
@@ -710,7 +833,7 @@ export default function MingguEfektifPage() {
   // ============================================================
   // GENERATE PDF (client-side via API call)
   // ============================================================
-  const handleDownloadPdf = async (semester: SemesterInfo, mode: 'lembaga' | 'mapel' = 'lembaga') => {
+  const handleDownloadPdf = async (semester: SemesterInfo, mode: 'lembaga' | 'mapel' = 'lembaga', aksi: 'unduh' | 'preview' = 'unduh') => {
     const isMapelMode = mode === 'mapel' && filterGuruId && filterMapelId && filterRombelId
 
     // Untuk unduhan Lembaga: pakai agenda & liburSet sesuai cakupan (scopeLevel) di selector atas.
@@ -739,9 +862,79 @@ export default function MingguEfektifPage() {
     let jpPerMingguPdf = 0
     let hasilHariPdf: HasilHariEfektif | null = null
     let cakupanLabel = ''
+    let nuptkGuru = ''
+
+    // --- Identitas penandatangan (Kepala Sekolah / Mudir) diambil OTOMATIS,
+    //     mengikuti unit yang relevan -- konsisten dengan Kaldik/Jadwal/Prota-Promes.
+    //     Lembaga Pusat -> Mudir (tanpa NIP). Unit/Kelas/Mapel -> Kepala Sekolah unit (NUPTK).
+    const identitas = ambilIdentitasOtomatis()
+    let unitIdUntukTtd: string | undefined
+    let scopeAdalahPusat = false
+
+    if (isMapelMode) {
+      unitIdUntukTtd = unitIdRombelMapel || undefined
+    } else if (scopeLevel === 'pusat') {
+      scopeAdalahPusat = true
+    } else if (scopeLevel === 'unit') {
+      unitIdUntukTtd = scopeUnitId || undefined
+    } else if (scopeLevel === 'kelas') {
+      unitIdUntukTtd = scopeUnitResolved || undefined
+    }
+
+    const unitDataTtd = unitIdUntukTtd ? identitas?.unitList.find(u => u.id === unitIdUntukTtd) : undefined
+    const namaPenandatangan = scopeAdalahPusat ? (identitas?.namaMudir || '') : (unitDataTtd?.namaKepala || '')
+    const nipPenandatangan = scopeAdalahPusat ? '' : (unitDataTtd?.nipKepala || '') // Pusat = Mudir, tidak pakai NIP
+    const labelPenandatangan = scopeAdalahPusat ? 'Mudir' : 'Kepala Sekolah'
+    const alamatUntukTtd = unitDataTtd?.alamat || identitas?.alamat || ''
+    const kotaUntukTtd = localStorage.getItem('profil_kota') || ''
+    const titiMangsaUntukTtd = localStorage.getItem('profil_titi_mangsa') || ''
+
+    // "Satuan Pendidikan" WAJIB mengikuti cakupan yang sedang dipilih --
+    // Lembaga Pusat -> nama lembaga pusat/yayasan. Unit/Kelas/Mapel -> nama
+    // unit cabang yang bersangkutan (BUKAN selalu nama lembaga pusat seperti
+    // sebelumnya).
+    const namaSatuanPendidikanPdf = scopeAdalahPusat
+      ? (identitas?.namaLembaga || namaSekolah)
+      : (unitDataTtd?.nama || namaSekolah)
+
+    // --- Integrasi data TP dari CP, TP & ATP + alokasi JP yang sudah diisi
+    //     guru di halaman Prota — supaya guru TIDAK perlu isi ulang JP di
+    //     sini, cukup lihat hasilnya di PDF Analisis Alokasi Waktu.
+    let distribusiTp: { nomor: string; deskripsi: string; jp: number }[] = []
+    if (isMapelMode) {
+      try {
+        const daftarTpRaw = localStorage.getItem(kunciTahun('data_tp'))
+        const daftarAtpRaw = localStorage.getItem(kunciTahun('data_atp'))
+        const daftarTpX = daftarTpRaw ? JSON.parse(daftarTpRaw) : []
+        const daftarAtpX = daftarAtpRaw ? JSON.parse(daftarAtpRaw) : []
+        const alokasiRaw = localStorage.getItem(`prota_alokasi_${filterMapelId}_${filterRombelId}`)
+        const alokasiMap = alokasiRaw ? JSON.parse(alokasiRaw) : {}
+
+        const rombelObj = daftarRombel.find((r: any) => r.id === filterRombelId)
+        const namaTingkatKelas = String(rombelObj?.tingkat || rombelObj?.kelas || rombelObj?.nama || '')
+          .toUpperCase().replace(/^KELAS\s+/, '')
+        const romawiMatch = namaTingkatKelas.match(/^(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)\b/)
+        const tingkatKelas = romawiMatch ? romawiMatch[1] : namaTingkatKelas
+
+        distribusiTp = daftarAtpX
+          .filter((a: any) => a.mapelId === filterMapelId && a.kelas === tingkatKelas && a.semester === semester.id)
+          .sort((x: any, y: any) => (x.urutanDiKelas || 0) - (y.urutanDiKelas || 0))
+          .map((a: any) => {
+            const tp = daftarTpX.find((t: any) => t.id === a.tpId)
+            return {
+              nomor: tp?.nomor || '',
+              deskripsi: tp?.deskripsi || '(TP tidak ditemukan)',
+              jp: alokasiMap[a.id]?.jp || 0,
+            }
+          })
+      } catch {
+        distribusiTp = []
+      }
+    }
 
     if (isMapelMode) {
       namaGuru = daftarGuru.find((g: any) => g.id === filterGuruId)?.nama || ''
+      nuptkGuru = daftarGuru.find((g: any) => g.id === filterGuruId)?.nip || ''
       namaMapelPdf = daftarMapel.find((m: any) => m.id === filterMapelId)?.nama || ''
       namaRombelPdf = daftarRombel.find((r: any) => r.id === filterRombelId)?.nama || ''
       jpPerMingguPdf = jpPerMingguAktif
@@ -757,22 +950,60 @@ export default function MingguEfektifPage() {
     }
 
     const payload = {
-      namaSekolah,
+      namaSekolah: namaSatuanPendidikanPdf,
+      alamat: alamatUntukTtd,
+      kota: kotaUntukTtd,
+      titiMangsa: titiMangsaUntukTtd,
       semester: semester.nama,
       tahunAjaran: semester.tahunAjaran,
       tanggalMulai: formatTgl(semester.tanggalMulai),
       tanggalSelesai: formatTgl(semester.tanggalSelesai),
       cakupan: cakupanLabel,
       namaGuru, namaMapel: namaMapelPdf, namaRombel: namaRombelPdf,
+      nuptkGuru,
       jpPerMinggu: jpPerMingguPdf,
       hasil: semHasil,
       bulanDistribusi,
-      hasilHari: hasilHariPdf
+      hasilHari: hasilHariPdf,
+      namaPenandatangan,
+      nipPenandatangan,
+      labelPenandatangan,
+      distribusiTp,
     }
 
-    const dataStr = encodeURIComponent(JSON.stringify(payload))
-    const url = `/api/download-alokasi-waktu?data=${dataStr}`
-    window.open(url, '_blank')
+    // PENTING: dikirim lewat POST (body), BUKAN lewat query string URL --
+    // data semester Ganjil/Genap bisa cukup besar (banyak minggu & kegiatan)
+    // sehingga kalau dipaksa lewat URL bisa melebihi batas panjang URL
+    // browser/server dan menghasilkan error "HTTP 431".
+    try {
+      const res = await fetch('/api/download-alokasi-waktu', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const pesan = await res.text()
+        alert(`Gagal membuat PDF: ${pesan}`)
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      if (aksi === 'preview') {
+        if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+        previewRef.current = url
+        setPreviewUrl(url)
+        return
+      }
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Alokasi_Waktu_${semester.nama}_${(semester.tahunAjaran || '').replace('/', '-')}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      alert(`Gagal membuat PDF: ${e?.message || e}`)
+    }
   }
 
   if (loading || diizinkanAkses === null) return <div className="p-8 text-center font-semibold text-[#6A197D]">Memuat Modul Minggu Efektif...</div>
@@ -782,7 +1013,7 @@ export default function MingguEfektifPage() {
   // RENDER
   // ============================================================
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-800 font-body">
+    <div className="flex flex-col md:flex-row min-h-screen bg-slate-50 text-slate-800 font-body">
       <style jsx global>{`
         @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Open+Sans:wght@400;500;600;700&display=swap');
         .font-body, .font-body * {
@@ -814,6 +1045,11 @@ export default function MingguEfektifPage() {
             <Calendar className="w-5 h-5 text-[#6A197D]" />
             <h2 className="font-bold text-slate-800 text-sm">Pengaturan Rentang Semester</h2>
           </div>
+          <p className="text-[10px] text-slate-500 -mt-2">
+            Tahun ajaran mengikuti <strong>Tahun Ajaran Aktif</strong> yang diatur di menu Beranda Dasbor — tidak bisa
+            diubah manual di sini. Hanya rentang tanggal per semester yang perlu diatur, dan harus sesuai dengan
+            periode yang ditetapkan di Kalender Pendidikan (Kaldik).
+          </p>
           {bolehEdit ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             {/* Ganjil */}
@@ -822,24 +1058,27 @@ export default function MingguEfektifPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Tahun Ajaran</label>
-                  <input type="text" value={semesterGanjil.tahunAjaran}
-                    onChange={e => simpanSemester({ ...semesterGanjil, tahunAjaran: e.target.value }, 'ganjil')}
-                    className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D]" />
+                  <p className="w-full px-3 py-2 border rounded-xl text-xs font-bold bg-slate-50 text-slate-600">{tahunAjaranAktif || '—'}</p>
                 </div>
                 <div />
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Tanggal Mulai</label>
                   <input type="date" value={semesterGanjil.tanggalMulai}
-                    onChange={e => simpanSemester({ ...semesterGanjil, tanggalMulai: e.target.value }, 'ganjil')}
+                    onChange={e => simpanSemester({ ...semesterGanjil, tanggalMulai: e.target.value, tahunAjaran: tahunAjaranAktif }, 'ganjil')}
                     className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D]" />
                 </div>
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Tanggal Selesai</label>
                   <input type="date" value={semesterGanjil.tanggalSelesai}
-                    onChange={e => simpanSemester({ ...semesterGanjil, tanggalSelesai: e.target.value }, 'ganjil')}
+                    onChange={e => simpanSemester({ ...semesterGanjil, tanggalSelesai: e.target.value, tahunAjaran: tahunAjaranAktif }, 'ganjil')}
                     className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D]" />
                 </div>
               </div>
+              {peringatanTanggal(semesterGanjil, 'ganjil', tahunAjaranAktif) && (
+                <p className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                  ⚠️ {peringatanTanggal(semesterGanjil, 'ganjil', tahunAjaranAktif)}
+                </p>
+              )}
             </div>
             {/* Genap */}
             <div className="space-y-3 border border-[#FFDE59]/60 rounded-xl p-4 bg-[#FFDE59]/10">
@@ -847,24 +1086,27 @@ export default function MingguEfektifPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Tahun Ajaran</label>
-                  <input type="text" value={semesterGenap.tahunAjaran}
-                    onChange={e => simpanSemester({ ...semesterGenap, tahunAjaran: e.target.value }, 'genap')}
-                    className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D]" />
+                  <p className="w-full px-3 py-2 border rounded-xl text-xs font-bold bg-slate-50 text-slate-600">{tahunAjaranAktif || '—'}</p>
                 </div>
                 <div />
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Tanggal Mulai</label>
                   <input type="date" value={semesterGenap.tanggalMulai}
-                    onChange={e => simpanSemester({ ...semesterGenap, tanggalMulai: e.target.value }, 'genap')}
+                    onChange={e => simpanSemester({ ...semesterGenap, tanggalMulai: e.target.value, tahunAjaran: tahunAjaranAktif }, 'genap')}
                     className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D]" />
                 </div>
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Tanggal Selesai</label>
                   <input type="date" value={semesterGenap.tanggalSelesai}
-                    onChange={e => simpanSemester({ ...semesterGenap, tanggalSelesai: e.target.value }, 'genap')}
+                    onChange={e => simpanSemester({ ...semesterGenap, tanggalSelesai: e.target.value, tahunAjaran: tahunAjaranAktif }, 'genap')}
                     className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D]" />
                 </div>
               </div>
+              {peringatanTanggal(semesterGenap, 'genap', tahunAjaranAktif) && (
+                <p className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                  ⚠️ {peringatanTanggal(semesterGenap, 'genap', tahunAjaranAktif)}
+                </p>
+              )}
             </div>
           </div>
           ) : (
@@ -948,7 +1190,11 @@ export default function MingguEfektifPage() {
         {/* HASIL PERHITUNGAN MINGGU EFEKTIF */}
         {hasilPerhitungan && (
           <section className="space-y-6">
-            {/* KARTU RINGKASAN */}
+            {/* KARTU RINGKASAN — khusus tab Lembaga. Untuk tab "Per Mapel/Guru", kartu
+                ringkasannya sendiri (di dalam KartuPerhitunganMingguJam di bawah) baru
+                muncul setelah Guru/Mapel/Kelas dipilih, supaya tidak menyesatkan seolah
+                angka Lembaga adalah angka mapel yang belum dipilih. */}
+            {viewMode === 'lembaga' && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
                 { label: 'Total Minggu', val: hasilPerhitungan.totalMinggu, color: 'bg-slate-100 text-slate-800', icon: <Calendar className="w-5 h-5" /> },
@@ -963,7 +1209,9 @@ export default function MingguEfektifPage() {
                 </div>
               ))}
             </div>
+            )}
 
+            {viewMode === 'lembaga' && (
             <KartuPerhitunganMingguJam
               title="Perhitungan Minggu / Jam Efektif"
               subtitle="Lembaga — sesuai cakupan yang dipilih di atas"
@@ -971,10 +1219,13 @@ export default function MingguEfektifPage() {
               showDownload
               onDownloadGanjil={() => handleDownloadPdf(semesterGanjil, 'lembaga')}
               onDownloadGenap={() => handleDownloadPdf(semesterGenap, 'lembaga')}
+              onPreviewGanjil={() => handleDownloadPdf(semesterGanjil, 'lembaga', 'preview')}
+              onPreviewGenap={() => handleDownloadPdf(semesterGenap, 'lembaga', 'preview')}
               expandDetail={expandDetail}
               onToggleExpand={() => setExpandDetail(!expandDetail)}
               footnote={'* JP/Minggu untuk hasil spesifik per mapel dihitung otomatis dari tabel Pemetaan Jam — buka tab "Per Mapel/Guru" dan pilih Guru/Mapel/Kelas.'}
             />
+            )}
 
 
             {/* HARI EFEKTIF PER MAPEL/GURU */}
@@ -988,18 +1239,24 @@ export default function MingguEfektifPage() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Guru</label>
-                    <select value={filterGuruId} onChange={e => setFilterGuruId(e.target.value)}
-                      className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D] bg-white">
-                      <option value="">-- Pilih Guru --</option>
-                      {daftarGuru.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
-                    </select>
+                    {cakupanGuru ? (
+                      <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold bg-slate-50 text-slate-600">
+                        {daftarGuru.find((g: any) => g.id === filterGuruId)?.nama || 'Anda'} <span className="text-[9px] font-normal text-slate-400">(akun Anda)</span>
+                      </div>
+                    ) : (
+                      <select value={filterGuruId} onChange={e => setFilterGuruId(e.target.value)}
+                        className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D] bg-white">
+                        <option value="">-- Pilih Guru --</option>
+                        {daftarGuruSesuaiCakupan.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                      </select>
+                    )}
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Mata Pelajaran</label>
                     <select value={filterMapelId} onChange={e => setFilterMapelId(e.target.value)}
                       className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D] bg-white">
                       <option value="">-- Pilih Mapel --</option>
-                      {daftarMapel.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
+                      {daftarMapelSesuaiCakupan.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
                     </select>
                   </div>
                   <div>
@@ -1007,12 +1264,38 @@ export default function MingguEfektifPage() {
                     <select value={filterRombelId} onChange={e => setFilterRombelId(e.target.value)}
                       className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D] bg-white">
                       <option value="">-- Pilih Kelas --</option>
-                      {daftarRombel.map(r => <option key={r.id} value={r.id}>Kelas {r.nama}</option>)}
+                      {daftarRombelSesuaiCakupan.map(r => <option key={r.id} value={r.id}>Kelas {r.nama}</option>)}
                     </select>
                   </div>
                 </div>
 
                 {filterRombelId && hasilRombelMapel && (
+                  <>
+                  {/* KARTU RINGKASAN KHUSUS GURU+MAPEL+KELAS INI — dihitung dari
+                      hasil silang Kaldik (hari libur per kelas ini) DENGAN Jadwal
+                      Pelajaran (hari & JP aktual guru ini mengajar mapel ini di
+                      kelas ini). Angkanya BISA berbeda dari kartu Lembaga Pusat/
+                      Unit, karena di sini yang dihitung "efektif" adalah minggu
+                      yang masih punya hari mengajar guru ini yang tidak kena
+                      libur/kegiatan — bukan sekadar 3-hari-libur seperti di
+                      level Lembaga. */}
+                  {filterGuruId && filterMapelId && hasilHariEfektif && (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      {[
+                        { label: 'Total Minggu', val: hasilRombelMapel.totalMinggu, color: 'bg-slate-100 text-slate-800', icon: <Calendar className="w-5 h-5" /> },
+                        { label: 'Minggu Efektif (Mapel Ini)', val: hasilHariEfektif.perMinggu.filter(m => m.hariMengajar.length > 0).length, color: 'bg-[#FFDE59]/15 text-[#6A197D] border border-[#FFDE59]/60', icon: <CheckCircle2 className="w-5 h-5 text-[#6A197D]" /> },
+                        { label: 'Minggu Tidak Efektif (Mapel Ini)', val: hasilRombelMapel.totalMinggu - hasilHariEfektif.perMinggu.filter(m => m.hariMengajar.length > 0).length, color: 'bg-red-50 text-red-800 border border-red-100', icon: <AlertTriangle className="w-5 h-5 text-red-500" /> },
+                        { label: 'Total JP Efektif (Mapel Ini)', val: `${hasilHariEfektif.totalJpEfektif} JP`, color: 'bg-[#6A197D]/5 text-[#4A1159] border border-[#6A197D]/15', icon: <Calculator className="w-5 h-5 text-[#6A197D]" /> },
+                      ].map((item, i) => (
+                        <div key={i} className={`rounded-2xl p-5 space-y-2 ${item.color}`}>
+                          <div className="flex items-center gap-2 opacity-70">{item.icon}</div>
+                          <p className="text-3xl font-black">{item.val}</p>
+                          <p className="text-[10px] font-bold uppercase tracking-wider opacity-70">{item.label}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <KartuPerhitunganMingguJam
                     title={`Perhitungan Minggu / Jam Efektif — Kelas ${daftarRombel.find(r => r.id === filterRombelId)?.nama || ''}${filterMapelId ? ` (${daftarMapel.find(m => m.id === filterMapelId)?.nama || ''})` : ''}`}
                     subtitle="Disaring dari Kaldik khusus untuk kelas ini — bisa berbeda dari tabel Lembaga di atas"
@@ -1022,117 +1305,54 @@ export default function MingguEfektifPage() {
                     showDownload={Boolean(filterGuruId && filterMapelId)}
                     onDownloadGanjil={() => handleDownloadPdf(semesterGanjil, 'mapel')}
                     onDownloadGenap={() => handleDownloadPdf(semesterGenap, 'mapel')}
+                    onPreviewGanjil={() => handleDownloadPdf(semesterGanjil, 'mapel', 'preview')}
+                    onPreviewGenap={() => handleDownloadPdf(semesterGenap, 'mapel', 'preview')}
                     expandDetail={expandDetailMapel}
                     onToggleExpand={() => setExpandDetailMapel(!expandDetailMapel)}
                     footnote={filterGuruId && filterMapelId ? undefined : '* Pilih Guru dan Mata Pelajaran juga untuk menghitung IV. Jumlah Jam Efektif.'}
                   />
+                  </>
                 )}
 
                 {filterGuruId && filterMapelId && filterRombelId && jadwalTerjadwal.length === 0 && (
-                  <div className="bg-[#FFDE59]/15 border border-[#FFDE59]/80 rounded-xl p-3 text-[10px] font-semibold text-[#6A197D]">
-                    Belum ditemukan jadwal (hari mengajar) untuk kombinasi Guru/Mapel/Kelas ini di modul Jadwal Pelajaran,
-                    sehingga hari efektif belum bisa dihitung meski JP/minggu ({jpPerMingguAktif} JP) sudah terbaca dari tabel Pemetaan Jam.
-                    Susun dulu jadwalnya di modul Jadwal Pelajaran.
+                  <div className="bg-[#FFDE59]/15 border border-[#FFDE59]/80 rounded-xl p-3 text-[10px] font-semibold text-[#6A197D] space-y-2">
+                    <p>
+                      Belum ditemukan jadwal (hari mengajar) untuk kombinasi Guru/Mapel/Kelas ini di modul Jadwal Pelajaran,
+                      sehingga hari efektif belum bisa dihitung meski JP/minggu ({jpPerMingguAktif} JP) sudah terbaca dari tabel Pemetaan Jam.
+                      Susun dulu jadwalnya di modul Jadwal Pelajaran.
+                    </p>
+                    {/* Diagnostik sementara: bantu temukan field mana yang tidak cocok */}
+                    <details className="text-[9px] font-normal text-[#4A1159] bg-white/60 rounded-lg p-2 border border-[#FFDE59]/60">
+                      <summary className="cursor-pointer font-bold">Detail diagnostik (klik untuk lihat)</summary>
+                      <div className="pt-2 space-y-1">
+                        <p>Total entri Jadwal terbaca dari modul Jadwal Pelajaran: <strong>{daftarJadwal.length}</strong></p>
+                        <p>Cocok guruId saja: <strong>{daftarJadwal.filter((j: any) => j.guruId === filterGuruId).length}</strong></p>
+                        <p>Cocok mapelId saja: <strong>{daftarJadwal.filter((j: any) => j.mapelId === filterMapelId).length}</strong></p>
+                        <p>Cocok rombelId saja: <strong>{daftarJadwal.filter((j: any) => j.rombelId === filterRombelId).length}</strong></p>
+                        <p>Cocok guruId + mapelId + rombelId (belum cek jenis waktu): <strong>{daftarJadwal.filter((j: any) => j.guruId === filterGuruId && j.mapelId === filterMapelId && j.rombelId === filterRombelId).length}</strong></p>
+                        <p>Total entri Master Waktu terbaca: <strong>{daftarWaktu.length}</strong> (bertipe &quot;mapel&quot;: {daftarWaktu.filter((w: any) => w.jenis === 'mapel').length})</p>
+                        <p className="pt-1 text-slate-500">Kalau baris ke-4 di atas (guruId+mapelId+rombelId) menunjukkan angka 0 padahal Anda yakin datanya ada di Plot Matriks, kemungkinan ID Kelas/Guru/Mapel yang tersimpan di entri jadwal berbeda dari yang dipakai saat ini — screenshot bagian ini akan sangat membantu diagnosis lebih lanjut.</p>
+                      </div>
+                    </details>
                   </div>
                 )}
 
-                {hasilHariEfektif ? (
-                  <div className="space-y-5">
-                    {/* Ringkasan */}
-                    <div className="grid grid-cols-3 gap-4">
-                      <div className="bg-[#6A197D]/5 border border-[#6A197D]/15 rounded-xl p-4 text-center">
-                        <p className="text-2xl font-black text-[#4A1159]">{hasilHariEfektif.totalHariMengajar}</p>
-                        <p className="text-[10px] font-bold text-[#6A197D] uppercase tracking-wider mt-1">Total Hari Mengajar Efektif</p>
-                      </div>
-                      <div className="bg-[#FFDE59]/15 border border-[#FFDE59]/60 rounded-xl p-4 text-center">
-                        <p className="text-2xl font-black text-[#6A197D]">{hasilHariEfektif.totalJpEfektif}</p>
-                        <p className="text-[10px] font-bold text-[#6A197D] uppercase tracking-wider mt-1">Total JP Efektif</p>
-                      </div>
-                      <div className="bg-[#FFDE59]/15 border border-[#FFDE59]/60 rounded-xl p-4 text-center">
-                        <p className="text-2xl font-black text-[#6A197D]">
-                          {hasilHariEfektif.perHari.map(h => `${h.hari}(${h.jumlah}x)`).join(', ') || '-'}
-                        </p>
-                        <p className="text-[10px] font-bold text-[#6A197D] uppercase tracking-wider mt-1">Distribusi Hari</p>
-                      </div>
-                    </div>
-
-                    <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 text-[10px] font-semibold text-slate-500">
-                      JP/Minggu: <strong className="text-slate-700">{jpPerMingguAktif} JP</strong>{' '}
-                      <span className="text-[#6A197D]">(otomatis dijumlahkan dari tabel Pemetaan Jam di modul Jadwal)</span>
-                    </div>
-
-                    {/* Keterangan penting: minggu tidak efektif tapi hari mengajar tetap ada */}
+                {/* Ringkasan tambahan JP efektif (hasil silang dengan Jadwal Pelajaran) --
+                    HANYA ringkasan singkat, bukan tabel minggu efektif kedua yang terpisah,
+                    supaya tidak dobel dengan kartu "Perhitungan Minggu / Jam Efektif" di atas. */}
+                {hasilHariEfektif && (
+                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-100 space-y-1.5 text-xs">
+                    <p className="text-slate-600">
+                      Total Hari Mengajar Efektif: <strong className="text-[#58146A]">{hasilHariEfektif.totalHariMengajar} hari</strong>
+                      {' '}({hasilHariEfektif.perHari.map(h => `${h.hari}(${h.jumlah}x)`).join(', ') || '-'})
+                    </p>
                     {hasilHariEfektif.perMinggu.some(m => !m.efektif && m.hariMengajar.length > 0) && (
-                      <div className="bg-[#FFDE59]/15 border border-[#FFDE59]/80 rounded-xl p-4 flex gap-3">
-                        <AlertTriangle className="w-4 h-4 text-[#6A197D] shrink-0 mt-0.5" />
-                        <div>
-                          <p className="text-xs font-black text-[#6A197D]">Perhatian: Ada minggu tidak efektif namun kelas ini tetap KBM</p>
-                          <p className="text-[10px] font-medium text-[#6A197D] mt-1">
-                            Minggu dihitung tidak efektif untuk kelas ini (≥3 hari libur/kegiatan yang menyasar kelas ini) tetapi hari mengajar
-                            tidak bertepatan dengan hari libur tersebut, sehingga JP tetap terhitung efektif pada hari itu.
-                          </p>
-                        </div>
-                      </div>
+                      <p className="text-[10px] font-semibold text-[#6A197D] bg-[#FFDE59]/15 border border-[#FFDE59]/60 rounded-lg px-2.5 py-1.5 mt-1">
+                        ⚠️ Ada minggu yang berstatus "tidak efektif" untuk kelas ini (≥3 hari kena kegiatan/libur) namun tetap ada KBM
+                        mapel ini pada hari yang tidak bertepatan dengan hari libur tersebut — JP tetap terhitung efektif, makanya
+                        "Minggu Efektif (Mapel Ini)" di kartu atas bisa lebih tinggi dari perhitungan Kelas/Lembaga.
+                      </p>
                     )}
-
-                    {/* Tabel detail per minggu */}
-                    <div className="overflow-x-auto border border-slate-200 rounded-xl max-h-[400px] overflow-y-auto">
-                      <table className="w-full text-left text-[11px] border-collapse">
-                        <thead>
-                          <tr className="bg-slate-50 font-black text-slate-600 text-[10px] uppercase">
-                            <th className="p-3 border-b border-slate-200">Minggu</th>
-                            <th className="p-3 border-b border-slate-200 text-center">Status Minggu (Kelas Ini)</th>
-                            <th className="p-3 border-b border-slate-200">Hari Mengajar Efektif</th>
-                            <th className="p-3 border-b border-slate-200 text-center">JP Efektif</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {hasilHariEfektif.perMinggu.map((m, i) => (
-                            <tr key={i} className={`${!m.efektif && m.hariMengajar.length > 0 ? 'bg-[#FFDE59]/10' : m.efektif ? 'hover:bg-slate-50' : 'bg-red-50/30'}`}>
-                              <td className="p-3 font-bold text-slate-700 text-[10px]">{m.mingguLabel}</td>
-                              <td className="p-3 text-center">
-                                <span className={`px-2 py-0.5 rounded text-[9px] font-black border uppercase ${m.efektif ? 'bg-[#FFDE59]/15 text-[#6A197D] border-[#FFDE59]/60' : 'bg-red-50 text-red-700 border-red-100'}`}>
-                                  {m.efektif ? '✓ Efektif' : '✗ Tdk Efektif'}
-                                </span>
-                              </td>
-                              <td className="p-3">
-                                {m.hariMengajar.length > 0
-                                  ? <div className="flex gap-1 flex-wrap">
-                                      {m.hariMengajar.map(h => (
-                                        <span key={h} className="px-1.5 py-0.5 bg-[#6A197D]/5 text-[#58146A] border border-[#6A197D]/15 rounded text-[9px] font-black">{h}</span>
-                                      ))}
-                                    </div>
-                                  : <span className="text-slate-300 text-[10px]">Tidak mengajar</span>
-                                }
-                              </td>
-                              <td className="p-3 text-center font-extrabold text-[#58146A]">{m.jpEfektif > 0 ? `${m.jpEfektif} JP` : '-'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    {/* Ringkasan JP Efektif */}
-                    <div className="bg-slate-50 rounded-xl p-4 border border-slate-100 space-y-1.5 text-xs">
-                      <p className="font-black text-slate-700">Ringkasan Alokasi Waktu</p>
-                      <p className="text-slate-600">
-                        Jumlah Minggu Efektif (Kelas ini): <strong className="text-[#58146A]">{hasilRombelMapel?.mingguEfektif ?? 0} minggu</strong>
-                      </p>
-                      <p className="text-slate-600">
-                        Total Hari Mengajar Efektif: <strong className="text-[#58146A]">{hasilHariEfektif.totalHariMengajar} hari</strong>
-                      </p>
-                      <p className="text-slate-600">
-                        Total JP Efektif: <strong className="text-[#6A197D] text-sm">{hasilHariEfektif.totalJpEfektif} JP</strong>
-                      </p>
-                      <p className="text-[10px] text-slate-400 pt-1">
-                        * Dihitung khusus untuk kelas {daftarRombel.find(r => r.id === filterRombelId)?.nama || ''} — kegiatan kaldik yang
-                        hanya menyasar kelas/tingkat lain tidak ikut mengurangi hari efektif kelas ini.
-                      </p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="py-10 text-center text-slate-400 text-sm">
-                    Pilih Guru, Mata Pelajaran, dan Kelas untuk melihat perhitungan hari efektif.
                   </div>
                 )}
               </div>
@@ -1148,6 +1368,7 @@ export default function MingguEfektifPage() {
           </div>
         )}
       </main>
+      <PratinjauPdfModal url={previewUrl} onClose={() => setPreviewUrl(null)} judul="Pratinjau Analisis Alokasi Waktu" />
     </div>
   )
 }

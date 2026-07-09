@@ -9,7 +9,7 @@ import { supabase } from '@/app/supabase'
 import {
   Landmark, LogOut, Shield, BookOpen, Home, Building,
   CalendarDays, BarChart2, FileText, FileSpreadsheet, Clock,
-  UserPlus, LucideIcon, Activity,
+  UserPlus, LucideIcon, Activity, Menu, X,
 } from 'lucide-react'
 import { getAksesInfo, AksesInfo } from '@/lib/aksesPeran'
 
@@ -31,8 +31,8 @@ const MENU_ITEMS: MenuItem[] = [
   { moduleId: 'guru',           href: '/peran/mapel',    label: 'Mata Pelajaran',       icon: BookOpen },
   { moduleId: 'kaldik',         href: '/kaldik',         label: 'Kalender Pendidikan',  icon: CalendarDays, sectionBefore: 'Modul Administrasi' },
   { moduleId: 'jadwal',         href: '/jadwal',         label: 'Jadwal Pelajaran',     icon: Clock },
-  { moduleId: 'minggu_efektif', href: '/minggu-efektif', label: 'Minggu Efektif',       icon: BarChart2 },
   { moduleId: 'cp_tp_atp',      href: '/cp-tp-atp',      label: 'CP, TP & ATP',         icon: FileText },
+  { moduleId: 'minggu_efektif', href: '/minggu-efektif', label: 'Minggu Efektif',       icon: BarChart2 },
   { moduleId: 'prota_promes',   href: '/prota-promes',   label: 'Prota & Promes',       icon: FileSpreadsheet },
   { moduleId: 'rpp',            href: '/rpp',            label: 'RPP / Modul Ajar',     icon: BookOpen },
   { moduleId: 'diagnostik',     href: '/status-sinkronisasi', label: 'Status Sinkronisasi', icon: Activity, sectionBefore: 'Sistem' },
@@ -50,6 +50,9 @@ export default function Sidebar() {
   // bukan akun Guru yang dibuat otomatis oleh sistem (walau entah bagaimana
   // caranya akun Guru itu login).
   const [isAdminAsli, setIsAdminAsli] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
+
+  useEffect(() => { setMobileOpen(false) }, [pathname])
 
   useEffect(() => {
     const si = localStorage.getItem('identitas_induk')
@@ -83,61 +86,109 @@ export default function Sidebar() {
     return !!akses.aksesMap[moduleId]?.read
   }
 
-  return (
-    <aside className="font-opensans w-72 bg-white border-r border-slate-200 flex flex-col justify-between hidden md:flex sticky top-0 h-screen shrink-0">
-      <div className="overflow-y-auto">
-        <div className="h-20 flex flex-col justify-center px-6 border-b-2 border-[#FFDE59] bg-[#F7ECFA]/40">
-          <div className="flex items-center gap-3">
-            {logoInduk
-              ? <img src={logoInduk} alt="Logo" className="w-8 h-8 object-contain shrink-0" />
-              : <Landmark className="w-6 h-6 text-[#6A197D] shrink-0" />}
-            <h2 className="font-baloo text-xs font-bold text-[#220729] uppercase tracking-widest truncate">{namaInduk}</h2>
-          </div>
-        </div>
-
-        <nav className="p-4 space-y-1">
-          {MENU_ITEMS.map(item => {
-            if (!bisaLihat(item.moduleId)) return null
-            const aktif = item.href === '/dashboard'
-              ? pathname === '/dashboard'
-              : pathname === item.href || pathname?.startsWith(item.href + '/')
-            const Icon = item.icon
-            return (
-              <div key={item.href}>
-                {item.sectionBefore && (
-                  <div className="font-baloo pt-6 pb-2 px-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                    {item.sectionBefore}
-                  </div>
-                )}
-                <Link
-                  href={item.href}
-                  className={`font-opensans flex items-center gap-3 px-4 py-3 text-sm rounded-xl transition ${
-                    aktif
-                      ? 'font-bold text-white bg-[#6A197D] shadow-md shadow-[#E3C2ED]'
-                      : 'font-medium text-slate-600 hover:bg-[#F7ECFA]'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" /> {item.label}
-                </Link>
+  const renderNav = () => (
+    <nav className="p-4 space-y-1">
+      {MENU_ITEMS.map(item => {
+        if (!bisaLihat(item.moduleId)) return null
+        const aktif = item.href === '/dashboard'
+          ? pathname === '/dashboard'
+          : pathname === item.href || pathname?.startsWith(item.href + '/')
+        const Icon = item.icon
+        return (
+          <div key={item.href}>
+            {item.sectionBefore && (
+              <div className="font-baloo pt-6 pb-2 px-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                {item.sectionBefore}
               </div>
-            )
-          })}
-        </nav>
+            )}
+            <Link
+              href={item.href}
+              className={`font-opensans flex items-center gap-3 px-4 py-3 text-sm rounded-xl transition ${
+                aktif
+                  ? 'font-bold text-white bg-[#6A197D] shadow-md shadow-[#E3C2ED]'
+                  : 'font-medium text-slate-600 hover:bg-[#F7ECFA]'
+              }`}
+            >
+              <Icon className="w-4 h-4" /> {item.label}
+            </Link>
+          </div>
+        )
+      })}
+    </nav>
+  )
+
+  const renderLogoutBlock = () => (
+    <div className="p-4 border-t border-slate-200 bg-slate-50">
+      {akses?.isGuru && (
+        <p className="px-1 pb-2 text-[10px] text-slate-400">
+          Masuk sebagai: <span className="font-bold text-slate-600">{akses.namaGuru}</span>
+        </p>
+      )}
+      <button
+        onClick={handleLogout}
+        className="font-opensans flex items-center gap-3 px-4 py-2.5 w-full text-sm font-bold text-red-600 bg-white border border-red-100 rounded-xl hover:bg-red-50 transition"
+      >
+        <LogOut className="w-4 h-4" /> Keluar Sistem
+      </button>
+    </div>
+  )
+
+  return (
+    <>
+      {/* ── TOP BAR KHUSUS HP/TABLET (md ke bawah) ── */}
+      <div className="font-opensans md:hidden sticky top-0 z-40 flex items-center gap-3 h-16 px-4 bg-white border-b-2 border-[#FFDE59] shadow-sm">
+        <button
+          onClick={() => setMobileOpen(true)}
+          className="p-2 -ml-2 rounded-lg text-[#6A197D] hover:bg-[#F7ECFA] transition"
+          aria-label="Buka menu"
+        >
+          <Menu className="w-6 h-6" />
+        </button>
+        {logoInduk
+          ? <img src={logoInduk} alt="Logo" className="w-7 h-7 object-contain shrink-0" />
+          : <Landmark className="w-5 h-5 text-[#6A197D] shrink-0" />}
+        <h2 className="font-baloo text-xs font-bold text-[#220729] uppercase tracking-widest truncate">{namaInduk}</h2>
       </div>
 
-      <div className="p-4 border-t border-slate-200 bg-slate-50">
-        {akses?.isGuru && (
-          <p className="px-1 pb-2 text-[10px] text-slate-400">
-            Masuk sebagai: <span className="font-bold text-slate-600">{akses.namaGuru}</span>
-          </p>
-        )}
-        <button
-          onClick={handleLogout}
-          className="font-opensans flex items-center gap-3 px-4 py-2.5 w-full text-sm font-bold text-red-600 bg-white border border-red-100 rounded-xl hover:bg-red-50 transition"
-        >
-          <LogOut className="w-4 h-4" /> Keluar Sistem
-        </button>
-      </div>
-    </aside>
+      {/* ── DRAWER MENU UNTUK HP/TABLET ── */}
+      {mobileOpen && (
+        <div className="md:hidden fixed inset-0 z-50 flex">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setMobileOpen(false)} />
+          <aside className="relative font-opensans w-72 max-w-[85vw] bg-white flex flex-col justify-between h-full overflow-y-auto shadow-2xl animate-in slide-in-from-left">
+            <div>
+              <div className="h-16 flex items-center justify-between px-4 border-b-2 border-[#FFDE59] bg-[#F7ECFA]/40">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {logoInduk
+                    ? <img src={logoInduk} alt="Logo" className="w-7 h-7 object-contain shrink-0" />
+                    : <Landmark className="w-5 h-5 text-[#6A197D] shrink-0" />}
+                  <h2 className="font-baloo text-xs font-bold text-[#220729] uppercase tracking-widest truncate">{namaInduk}</h2>
+                </div>
+                <button onClick={() => setMobileOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 shrink-0" aria-label="Tutup menu">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              {renderNav()}
+            </div>
+            {renderLogoutBlock()}
+          </aside>
+        </div>
+      )}
+
+      {/* ── SIDEBAR TETAP UNTUK DESKTOP (md ke atas) ── */}
+      <aside className="font-opensans w-72 bg-white border-r border-slate-200 flex-col justify-between hidden md:flex sticky top-0 h-screen shrink-0">
+        <div className="overflow-y-auto">
+          <div className="h-20 flex flex-col justify-center px-6 border-b-2 border-[#FFDE59] bg-[#F7ECFA]/40">
+            <div className="flex items-center gap-3">
+              {logoInduk
+                ? <img src={logoInduk} alt="Logo" className="w-8 h-8 object-contain shrink-0" />
+                : <Landmark className="w-6 h-6 text-[#6A197D] shrink-0" />}
+              <h2 className="font-baloo text-xs font-bold text-[#220729] uppercase tracking-widest truncate">{namaInduk}</h2>
+            </div>
+          </div>
+          {renderNav()}
+        </div>
+        {renderLogoutBlock()}
+      </aside>
+    </>
   )
 }

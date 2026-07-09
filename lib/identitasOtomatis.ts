@@ -26,11 +26,12 @@ interface GuruRingkas {
   peranIds?: string[]
 }
 interface PeranRingkas { id: string; nama: string }
-interface UnitLembaga { id: string; nama?: string; npsn?: string; logo?: string; kop?: string }
+interface UnitLembaga { id: string; nama?: string; npsn?: string; alamat?: string; logo?: string; kop?: string }
 
 export interface IdentitasOtomatis {
   namaLembaga: string
   npsn: string
+  alamat: string
   logo: string
   kop: string
   namaMudir: string
@@ -39,6 +40,7 @@ export interface IdentitasOtomatis {
     id: string
     nama: string
     npsn: string
+    alamat: string
     logo: string
     kop: string
     namaKepala: string
@@ -85,6 +87,7 @@ export function ambilIdentitasOtomatis(): IdentitasOtomatis | null {
         id: u.id,
         nama: u.nama || '',
         npsn: u.npsn || '',
+        alamat: u.alamat || induk.alamat || '',
         logo: u.logo || '',
         kop: u.kop || '',
         namaKepala: kepsek?.nama || '',
@@ -95,6 +98,7 @@ export function ambilIdentitasOtomatis(): IdentitasOtomatis | null {
     return {
       namaLembaga: induk.nama || '',
       npsn: induk.npsn || '',
+      alamat: induk.alamat || '',
       logo: induk.logo_utama || induk.logo || '',
       kop: induk.kop || '',
       namaMudir: mudir?.nama || '',

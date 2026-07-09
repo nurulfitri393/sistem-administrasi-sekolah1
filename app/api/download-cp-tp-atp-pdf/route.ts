@@ -202,7 +202,7 @@ export async function POST(request: NextRequest) {
         const totalW = Object.values(COL).reduce((a, b) => a + b, 0)
 
         const drawTableHeader = () => {
-          rect(L, y, W, 20, '#6A197D')
+          rect(L, y, W, 20, '#EDE3F3')
           let cx = L
           const headers = [
             ['No', COL.no, 'center'],
@@ -217,7 +217,7 @@ export async function POST(request: NextRequest) {
           ]
           headers.forEach(([label, w, align]) => {
             txt(label as string, cx + 3, y + 5,
-              { bold: true, size: 7, color: 'white', w: (w as number) - 6, align: align as any })
+              { bold: true, size: 7, color: '#1E0A28', w: (w as number) - 6, align: align as any })
             cx += w as number
           })
           y += 20
@@ -270,22 +270,21 @@ export async function POST(request: NextRequest) {
       pageCheck(80)
       y += 10
       const now = new Date()
-      txt(`${namaSekolah || 'Bandung'}, ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`,
-        L, y, { size: 8, color: GRAY, w: W, align: 'right' })
-      y += 20
-
       const col1X = L + 30
       const col2X = L + W - 160
 
+      // Kepala Sekolah ("Mengetahui") SELALU di KIRI, Guru Mapel di KANAN
+      // -- titimangsa sejajar kolom KANAN (Guru). Tanpa garis TTD.
       txt('Mengetahui,', col1X, y, { size: 8, color: DARK })
+      txt(`${namaSekolah || 'Bandung'}, ${now.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`,
+        col2X, y, { size: 8, color: GRAY, w: 130 })
+      y += 10
+      txt('Kepala Sekolah,', col1X, y, { size: 8, color: DARK })
       txt('Guru Mata Pelajaran,', col2X, y, { size: 8, color: DARK })
-      txt('Kepala Sekolah,', col1X, y + 10, { size: 8, color: DARK })
-      y += 56
-      doc.moveTo(col1X, y).lineTo(col1X + 130, y).strokeColor(BORDER).lineWidth(0.5).stroke()
-      doc.moveTo(col2X, y).lineTo(col2X + 130, y).stroke()
-      y += 4
-      txt('_______________________________', col1X, y, { size: 7, color: GRAY })
-      txt(namaGuru || '_______________________________', col2X, y, { size: 7.5, bold: !!namaGuru, color: namaGuru ? DARK : GRAY })
+      y += 46
+      txt('', col1X, y, { size: 7.5, color: DARK })
+      txt(namaGuru || '', col2X, y, { size: 7.5, bold: !!namaGuru, color: DARK })
+      if (namaGuru) txt('NUPTK: -', col2X, y + 10, { size: 7, color: GRAY })
 
       // ── PAGE NUMBERS ──────────────────────────────────────
       const range = doc.bufferedPageRange()

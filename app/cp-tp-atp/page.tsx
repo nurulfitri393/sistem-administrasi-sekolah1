@@ -3,16 +3,18 @@ import { useAksesGuard } from '@/lib/useAksesGuard'
 import { bisaMengeditModul, getCakupanMengajarGuru } from '@/lib/aksesPeran'
 
 import Sidebar from '@/components/Sidebar'
-import { useEffect, useState, useMemo } from 'react'
+import PratinjauPdfModal from '@/components/PratinjauPdfModal'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
 import { kunciTahun } from '@/lib/tahunAjaran'
+import { ambilIdentitasOtomatis } from '@/lib/identitasOtomatis'
 import {
   Landmark, LogOut, Shield, BookOpen, Home, Building,
   CalendarDays, BarChart2, FileText, FileSpreadsheet, Clock,
   Plus, Trash2, Edit2, Check, ChevronDown, ChevronRight,
   Download, ArrowUp, ArrowDown, GripVertical, X,
-  BookMarked, Layers, ListChecks, Library
+  BookMarked, Layers, ListChecks, Library, Eye
 } from 'lucide-react'
 
 // ─────────────────────────────────────────────────────────────
@@ -90,6 +92,20 @@ const DIMENSI_PANCASILA = [
 ]
 
 const FASE_OPTIONS = ['A', 'B', 'C', 'D', 'E', 'F']
+
+/**
+ * Menentukan Fase yang relevan untuk SATU unit, berdasarkan jenjang yang
+ * tersirat dari namanya (SD/MI -> A,B,C ; SMP/MTs -> D ; SMA/SMK/MA -> E,F).
+ * Kalau nama unit tidak mengandung petunjuk jenjang, semua fase ditampilkan
+ * (tidak dibatasi) supaya tidak salah menyembunyikan pilihan yang valid.
+ */
+function faseUntukUnit(namaUnit: string): string[] {
+  const n = (namaUnit || '').toUpperCase()
+  if (/\bSD\b|\bMI\b/.test(n)) return ['A', 'B', 'C']
+  if (/\bSMP\b|\bMTS\b/.test(n)) return ['D']
+  if (/\bSMA\b|\bSMK\b|\bMA\b/.test(n)) return ['E', 'F']
+  return FASE_OPTIONS
+}
 const KELAS_OPTIONS_FALLBACK = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII']
 const ANGKA_KE_ROMAWI: { [k: string]: string } = {
   '1': 'I', '2': 'II', '3': 'III', '4': 'IV', '5': 'V', '6': 'VI',
@@ -187,6 +203,52 @@ export default function CpTpAtpPage() {
   const [filterMapelId, setFilterMapelId] = useState('')
   const [filterFase, setFilterFase] = useState('')
   const [filterGuruId, setFilterGuruId] = useState('')
+  const [filterUnitId, setFilterUnitId] = useState('') // '' = Lembaga Pusat (Mudir)
+  const [daftarLembaga, setDaftarLembaga] = useState<any[]>([])
+
+  // ── Alur seleksi berjenjang: Unit -> Fase -> Guru Pengampu -> Mata Pelajaran ──
+  // 1) Fase yang muncul mengikuti jenjang Unit yang dipilih (Lembaga Pusat =
+  //    gabungan semua jenjang unit yang terdaftar; unit tertentu = jenjang unit itu saja).
+  const faseOptionsTersedia = useMemo(() => {
+    if (!filterUnitId) {
+      // Lembaga Pusat -> gabungan (union) jenjang dari SEMUA unit yang ada
+      const gabungan = new Set<string>()
+      daftarLembaga.forEach(u => faseUntukUnit(u.nama).forEach(f => gabungan.add(f)))
+      return gabungan.size > 0 ? FASE_OPTIONS.filter(f => gabungan.has(f)) : FASE_OPTIONS
+    }
+    const unit = daftarLembaga.find(u => u.id === filterUnitId)
+    return faseUntukUnit(unit?.nama || '')
+  }, [filterUnitId, daftarLembaga])
+
+  // 2) Guru Pengampu yang muncul mengikuti Unit yang dipilih (guru yang memang
+  //    ditugaskan di unit tsb, lihat unitIds di Kelola Data Guru/Pembagian Peran).
+  const daftarGuruSesuaiUnit = useMemo(() => {
+    if (!filterUnitId) return daftarGuru // Lembaga Pusat -> semua guru
+    return daftarGuru.filter((g: any) => (g.unitIds || []).includes(filterUnitId))
+  }, [daftarGuru, filterUnitId])
+
+  // 3) Mata Pelajaran yang muncul mengikuti Guru Pengampu yang dipilih --
+  //    hanya mapel yang benar-benar diampu guru tsb.
+  const daftarMapelSesuaiGuru = useMemo(() => {
+    const dasar = daftarMapelTampil
+    if (!filterGuruId) return dasar
+    const guru = daftarGuru.find((g: any) => g.id === filterGuruId)
+    if (!guru) return dasar
+    return dasar.filter(m => (guru.mapelIds || []).includes(m.id))
+  }, [daftarMapelTampil, filterGuruId, daftarGuru])
+
+  // Reset berjenjang: kalau pilihan level atas berubah dan pilihan level bawah
+  // jadi tidak valid lagi, kosongkan supaya tidak salah data.
+  useEffect(() => {
+    if (filterFase && !faseOptionsTersedia.includes(filterFase)) setFilterFase('')
+    if (filterGuruId && !daftarGuruSesuaiUnit.some((g: any) => g.id === filterGuruId)) setFilterGuruId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterUnitId])
+
+  useEffect(() => {
+    if (filterMapelId && !daftarMapelSesuaiGuru.some(m => m.id === filterMapelId)) setFilterMapelId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterGuruId])
 
   const defaultTahunAjaran = (() => {
     const now = new Date()
@@ -194,6 +256,7 @@ export default function CpTpAtpPage() {
     return now.getMonth() >= 6 ? `${y}/${y + 1}` : `${y - 1}/${y}`
   })()
   const [tahunAjaran, setTahunAjaran] = useState(defaultTahunAjaran)
+  const [titiMangsaAtpInput, setTitiMangsaAtpInput] = useState('')
 
   // ── Form CP Umum
   const [formCpUmum, setFormCpUmum] = useState<Partial<CPUmum>>({})
@@ -222,6 +285,9 @@ export default function CpTpAtpPage() {
 
   // Download state
   const [downloadLoading, setDownloadLoading] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const previewRef = useRef<string | null>(null)
+  useEffect(() => { return () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current) } }, [])
 
   // ─────────────────────────────────────────────────────────
   // LOAD DATA
@@ -253,6 +319,15 @@ export default function CpTpAtpPage() {
 
       const sg = localStorage.getItem('master_guru'); if (sg) setDaftarGuru(JSON.parse(sg))
       const sm = localStorage.getItem('master_mapel'); if (sm) setDaftarMapel(JSON.parse(sm))
+      const sl = localStorage.getItem('daftar_lembaga'); if (sl) setDaftarLembaga(JSON.parse(sl))
+
+      // Kalau yang login adalah Guru, kunci ke akunnya sendiri (nama & unit)
+      // -- tidak bisa melihat/pilih identitas guru lain sama sekali.
+      if (cakupanGuru?.guruId) {
+        setFilterGuruId(cakupanGuru.guruId)
+        const guruSendiri = sg ? JSON.parse(sg).find((g: any) => g.id === cakupanGuru.guruId) : null
+        if (guruSendiri?.unitIds?.[0]) setFilterUnitId(guruSendiri.unitIds[0])
+      }
 
       // Kalau yang login adalah Guru, kunci ke mapel yang dia ampu saja.
       // Kalau cuma ampu 1 mapel, langsung dipilihkan otomatis.
@@ -273,7 +348,13 @@ export default function CpTpAtpPage() {
     init()
   }, [router])
 
-  const save = (key: string, data: any) => localStorage.setItem(key, JSON.stringify(data))
+  // PENTING: sebelumnya fungsi save() ini menulis LANGSUNG ke localStorage
+  // TANPA kunciTahun(), padahal pembacaan datanya (lihat useEffect init di atas)
+  // SUDAH pakai kunciTahun() -- akibatnya data yang baru disimpan seperti
+  // "hilang" lagi setelah reload, karena tersimpan di kunci yang berbeda dari
+  // yang dibaca. Diperbaiki di sini secara terpusat.
+  const KUNCI_TAHUN_CPTPATP = new Set(['data_cp', 'data_cp_umum', 'data_materi', 'data_tp', 'data_atp'])
+  const save = (key: string, data: any) => localStorage.setItem(KUNCI_TAHUN_CPTPATP.has(key) ? kunciTahun(key) : key, JSON.stringify(data))
 
   // ─────────────────────────────────────────────────────────
   // CP UMUM CRUD (Capaian Pembelajaran secara umum, per mapel & fase)
@@ -560,7 +641,7 @@ export default function CpTpAtpPage() {
     return { cpUmum, cp, materi, tp, atp, atpPerKelas, namaMapel, namaGuru }
   }
 
-  const handleDownloadPdf = async () => {
+  const handleDownloadPdf = async (mode: 'unduh' | 'preview' = 'unduh') => {
     if (!filterMapelId || !filterFase) { alert('Pilih Mata Pelajaran dan Fase terlebih dahulu untuk download.'); return }
     setDownloadLoading(true)
     try {
@@ -580,27 +661,38 @@ export default function CpTpAtpPage() {
       })
       const atpFullText = atpLines.length > 0 ? atpLines.join('\n') : '-'
 
-      const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+      const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
       const pageWidth = doc.internal.pageSize.getWidth()
       const marginLeft = 20, marginRight = 15
       const contentWidth = pageWidth - marginLeft - marginRight
       let y = 18
 
+      // Nama lembaga yang tercetak WAJIB mengikuti Unit yang dipilih di filter
+      // atas -- Lembaga Pusat -> nama lembaga pusat, Unit tertentu -> nama unit itu.
+      const identitasAtp = ambilIdentitasOtomatis()
+      const unitAtpTerpilih = filterUnitId ? identitasAtp?.unitList.find(u => u.id === filterUnitId) : undefined
+      const namaLembagaCetak = filterUnitId ? (unitAtpTerpilih?.nama || namaSekolah) : (identitasAtp?.namaLembaga || namaSekolah || namaInduk || '')
+
       doc.setFont('times', 'bold')
       doc.setFontSize(13)
       doc.text('ALUR TUJUAN PEMBELAJARAN', pageWidth / 2, y, { align: 'center' })
       y += 6
-      doc.text((namaSekolah || namaInduk || '').toUpperCase(), pageWidth / 2, y, { align: 'center' })
+      doc.text(namaLembagaCetak.toUpperCase(), pageWidth / 2, y, { align: 'center' })
       y += 9
 
       doc.setFont('times', 'normal')
       doc.setFontSize(10.5)
       const halfW = contentWidth / 2
-      doc.text(`Fase : FASE ${filterFase}`, marginLeft, y)
-      doc.text(`Nama Guru : ${namaGuru || '-'}`, marginLeft + halfW, y)
+      const labelW = 38 // lebar label tetap supaya titik dua selalu sejajar dalam 1 kolom
+      const barisInfo = (label: string, value: string, x: number, yy: number) => {
+        doc.text(label, x, yy)
+        doc.text(`: ${value}`, x + labelW, yy)
+      }
+      barisInfo('Fase', `FASE ${filterFase}`, marginLeft, y)
+      barisInfo('Nama Guru', namaGuru || '-', marginLeft + halfW, y)
       y += 5.5
-      doc.text(`Mata Pelajaran : ${namaMapel}`, marginLeft, y)
-      doc.text(`Tahun Ajaran : ${tahunAjaran}`, marginLeft + halfW, y)
+      barisInfo('Mata Pelajaran', namaMapel, marginLeft, y)
+      barisInfo('Tahun Ajaran', tahunAjaran, marginLeft + halfW, y)
       y += 8
 
       doc.text('Capaian Pembelajaran Umum', marginLeft, y)
@@ -640,7 +732,8 @@ export default function CpTpAtpPage() {
         ]],
         body,
         theme: 'grid',
-        styles: { font: 'helvetica', fontSize: 9.5, cellPadding: 2.2, lineColor: [0, 0, 0], lineWidth: 0.15, valign: 'top' },
+        styles: { font: 'times', fontSize: 9.5, cellPadding: 2.2, lineColor: [0, 0, 0], lineWidth: 0.15, valign: 'top' },
+        headStyles: { fillColor: [237, 227, 243], textColor: [30, 10, 40], font: 'times', fontStyle: 'bold' },
         columnStyles: {
           0: { cellWidth: contentWidth / 3 },
           1: { cellWidth: contentWidth / 3 },
@@ -648,8 +741,51 @@ export default function CpTpAtpPage() {
         },
       })
 
+      // ── TANDA TANGAN ──────────────────────────────────────
+      // Kepala Sekolah/Mudir ("Mengetahui") SELALU di KIRI (ditentukan dari
+      // selector "Lembaga / Unit" di atas), Guru Mapel di KANAN -- titimangsa
+      // sejajar kolom KANAN (Guru). Tanpa garis TTD.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const finalYAtp: number = (doc as any).lastAutoTable?.finalY || y
+      let ttdY = finalYAtp + 14
+      if (ttdY + 45 > doc.internal.pageSize.getHeight() - 15) { doc.addPage(); ttdY = 20 }
+
+      const namaPenandatanganAtp = filterUnitId ? (unitAtpTerpilih?.namaKepala || '') : (identitasAtp?.namaMudir || '')
+      const nipPenandatanganAtp = filterUnitId ? (unitAtpTerpilih?.nipKepala || '') : '' // Mudir tanpa NUPTK
+      const labelPenandatanganAtp = filterUnitId ? 'Kepala Sekolah' : 'Mudir'
+
+      const ttdColWAtp = 60
+      doc.setFont('times', 'normal'); doc.setFontSize(9)
+      doc.text('Mengetahui,', marginLeft, ttdY)
+      doc.text(`${labelPenandatanganAtp},`, marginLeft, ttdY + 5)
+      doc.setFont('times', 'bold')
+      const namaKsLines = doc.splitTextToSize(namaPenandatanganAtp || '(Nama)', ttdColWAtp)
+      doc.text(namaKsLines, marginLeft, ttdY + 30)
+      if (labelPenandatanganAtp !== 'Mudir') {
+        doc.setFont('times', 'normal'); doc.setFontSize(8)
+        doc.text(`NUPTK: ${nipPenandatanganAtp || '-'}`, marginLeft, ttdY + 30 + namaKsLines.length * 4)
+      }
+
+      const ttdX2Atp = pageWidth - marginRight - ttdColWAtp
+      const titiMangsaAtp = titiMangsaAtpInput.trim() || new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+      doc.setFont('times', 'normal'); doc.setFontSize(9)
+      doc.text(titiMangsaAtp, ttdX2Atp, ttdY)
+      doc.text('Guru Mata Pelajaran,', ttdX2Atp, ttdY + 5)
+      doc.setFont('times', 'bold')
+      const namaGuruLinesAtp = doc.splitTextToSize(namaGuru || '(Nama Guru)', ttdColWAtp)
+      doc.text(namaGuruLinesAtp, ttdX2Atp, ttdY + 30)
+      doc.setFont('times', 'normal'); doc.setFontSize(8)
+      doc.text(`NUPTK: ${daftarGuru.find(g => g.id === filterGuruId)?.nip || '-'}`, ttdX2Atp, ttdY + 30 + namaGuruLinesAtp.length * 4)
+
       const namaMapelFile = (namaMapel || 'Mapel').replace(/[^a-z0-9]+/gi, '_')
-      doc.save(`ATP_${namaMapelFile}_Fase${filterFase}.pdf`)
+      if (mode === 'preview') {
+        const url = doc.output('bloburl') as unknown as string
+        if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+        previewRef.current = url
+        setPreviewUrl(url)
+      } else {
+        doc.save(`ATP_${namaMapelFile}_Fase${filterFase}.pdf`)
+      }
     } catch (e) {
       alert('Gagal membuat PDF: ' + String(e instanceof Error ? e.message : e) +
         '\n\nPastikan paket "jspdf" dan "jspdf-autotable" sudah terpasang (npm install jspdf jspdf-autotable).')
@@ -789,7 +925,7 @@ export default function CpTpAtpPage() {
   // RENDER
   // ─────────────────────────────────────────────────────────
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-800">
+    <div className="flex flex-col md:flex-row min-h-screen bg-slate-50 text-slate-800">
 
       {/* SIDEBAR */}
       <Sidebar />
@@ -801,59 +937,94 @@ export default function CpTpAtpPage() {
           <p className="text-xs text-gray-500 mt-1">Susun CP, Materi, TP, dan Alur Tujuan Pembelajaran sesuai Kurikulum Merdeka.</p>
         </header>
 
-        {/* IDENTITAS DOKUMEN — CP & TP berlaku per Mapel + Fase, tanpa kelas/semester/cari */}
+        {/* IDENTITAS DOKUMEN — alur seleksi berjenjang: Unit -> Fase -> Guru -> Mapel */}
         <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
             <div>
-              <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">Mata Pelajaran</label>
-              <select value={filterMapelId} onChange={e => setFilterMapelId(e.target.value)}
-                disabled={!!cakupanGuru && daftarMapelTampil.length <= 1}
-                className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white disabled:bg-slate-50 disabled:text-slate-500">
-                <option value="">-- Pilih Mapel --</option>
-                {daftarMapelTampil.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
-              </select>
-              {cakupanGuru && (
-                <p className="text-[9px] text-slate-400 mt-1">Anda hanya bisa mengelola mata pelajaran yang Anda ampu.</p>
+              <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">1. Lembaga / Unit</label>
+              {cakupanGuru ? (
+                <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold bg-slate-50 text-slate-600">
+                  {daftarLembaga.find(u => u.id === filterUnitId)?.nama || 'Lembaga Pusat'} <span className="text-[9px] font-normal text-slate-400">(unit Anda)</span>
+                </div>
+              ) : (
+                <select value={filterUnitId} onChange={e => setFilterUnitId(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
+                  <option value="">Lembaga Pusat (Mudir)</option>
+                  {daftarLembaga.map(u => <option key={u.id} value={u.id}>{u.nama}</option>)}
+                </select>
               )}
+              <p className="text-[9px] text-slate-400 mt-1">Menentukan Fase, Guru Pengampu, serta Kepala Sekolah/Mudir yang tercantum di tanda tangan.</p>
             </div>
             <div>
-              <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">Fase</label>
+              <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">2. Fase</label>
               <select value={filterFase} onChange={e => setFilterFase(e.target.value)}
                 className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
                 <option value="">-- Pilih Fase --</option>
-                {FASE_OPTIONS.map(f => <option key={f} value={f}>Fase {f}</option>)}
+                {faseOptionsTersedia.map(f => <option key={f} value={f}>Fase {f}</option>)}
               </select>
               <p className="text-[9px] text-slate-400 mt-1">
-                Capaian &amp; Tujuan Pembelajaran berlaku untuk satu fase (mis. Fase D = seluruh SMP), bukan per kelas. Kelas baru dipetakan di tab ATP.
+                Pilihan menyesuaikan jenjang Unit di atas (mis. SMP → Fase D, SMA → Fase E/F). Berlaku untuk satu fase, bukan per kelas — kelas dipetakan di tab ATP.
               </p>
             </div>
           </div>
 
-          {/* Identitas untuk kop cetak */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end mt-4 pt-4 border-t border-slate-100">
             <div>
-              <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">Guru Pengampu</label>
-              <select value={filterGuruId} onChange={e => setFilterGuruId(e.target.value)}
-                className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
-                <option value="">-- Pilih Guru --</option>
-                {daftarGuru.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
-              </select>
+              <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">3. Guru Pengampu</label>
+              {cakupanGuru ? (
+                <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold bg-slate-50 text-slate-600">
+                  {daftarGuru.find(g => g.id === filterGuruId)?.nama || 'Anda'} <span className="text-[9px] font-normal text-slate-400">(akun Anda)</span>
+                </div>
+              ) : (
+                <select value={filterGuruId} onChange={e => setFilterGuruId(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
+                  <option value="">-- Pilih Guru --</option>
+                  {daftarGuruSesuaiUnit.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                </select>
+              )}
+              <p className="text-[9px] text-slate-400 mt-1">Daftar mengikuti guru yang ditugaskan di Unit terpilih (lihat Kelola Data Guru).</p>
             </div>
+            <div>
+              <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">4. Mata Pelajaran</label>
+              <select value={filterMapelId} onChange={e => setFilterMapelId(e.target.value)}
+                disabled={!!cakupanGuru && daftarMapelSesuaiGuru.length <= 1}
+                className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white disabled:bg-slate-50 disabled:text-slate-500">
+                <option value="">-- Pilih Mapel --</option>
+                {daftarMapelSesuaiGuru.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
+              </select>
+              <p className="text-[9px] text-slate-400 mt-1">
+                {filterGuruId ? 'Otomatis mengikuti mapel yang diampu guru terpilih.' : 'Pilih Guru Pengampu dulu supaya daftar mapel lebih tepat.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end mt-4 pt-4 border-t border-slate-100">
             <div>
               <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">Tahun Ajaran</label>
               <input value={tahunAjaran} onChange={e => setTahunAjaran(e.target.value)}
                 placeholder="Cth: 2025/2026"
                 className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0]" />
             </div>
+            <div>
+              <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">Titi Mangsa (Tempat, Tanggal)</label>
+              <input value={titiMangsaAtpInput} onChange={e => setTitiMangsaAtpInput(e.target.value)}
+                placeholder={`Cth: Bandung, ${new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`}
+                className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0]" />
+              <p className="text-[9px] text-slate-400 mt-1">Kosongkan untuk memakai tanggal hari ini otomatis.</p>
+            </div>
           </div>
           <p className="mt-3 text-[10px] text-slate-400 leading-relaxed">
-            Nama sekolah diambil otomatis dari Identitas Lembaga. Nama Guru & Tahun Ajaran ini akan tampil di bawah judul dokumen (sebelum tabel Capaian Umum, CP per Elemen, Materi, TP, dan ATP) saat dicetak.
+            Nama sekolah yang tercetak mengikuti Unit yang dipilih di atas (Lembaga Pusat → nama lembaga pusat; Unit tertentu → nama unit itu). Nama Guru & Tahun Ajaran ini akan tampil di bawah judul dokumen (sebelum tabel Capaian Umum, CP per Elemen, Materi, TP, dan ATP) saat dicetak.
           </p>
 
           {/* Cetak / Download — 1 dokumen gabungan */}
           {filterMapelId && filterFase ? (
             <div className="mt-3 flex gap-2 justify-end">
-              <button onClick={handleDownloadPdf} disabled={downloadLoading}
+              <button onClick={() => handleDownloadPdf('preview')} disabled={downloadLoading}
+                className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 px-4 py-2 rounded-xl font-bold text-xs shadow transition disabled:opacity-50" title="Pratinjau sebelum unduh">
+                <Eye className="w-3.5 h-3.5" /> Pratinjau
+              </button>
+              <button onClick={() => handleDownloadPdf()} disabled={downloadLoading}
                 className="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow transition disabled:opacity-50">
                 <Download className="w-3.5 h-3.5" /> {downloadLoading ? 'Menyiapkan...' : 'Cetak PDF (Capaian Umum, CP, Materi, TP & ATP)'}
               </button>
@@ -1570,6 +1741,7 @@ export default function CpTpAtpPage() {
         )}
 
       </main>
+      <PratinjauPdfModal url={previewUrl} onClose={() => setPreviewUrl(null)} judul="Pratinjau CP / TP / ATP" />
     </div>
   )
 }

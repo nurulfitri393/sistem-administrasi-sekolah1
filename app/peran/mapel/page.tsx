@@ -81,7 +81,7 @@ export default function MasterMapelPage() {
   if (diizinkanAkses === false) return null
 
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-800">
+    <div className="flex flex-col md:flex-row min-h-screen bg-slate-50 text-slate-800">
       <Sidebar />
 
       <main className="flex-1 p-8 overflow-y-auto max-w-5xl mx-auto space-y-6">

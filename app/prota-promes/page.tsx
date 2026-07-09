@@ -40,7 +40,8 @@
  */
 
 import Sidebar from '@/components/Sidebar'
-import { Fragment, useEffect, useState, useMemo } from 'react'
+import PratinjauPdfModal from '@/components/PratinjauPdfModal'
+import { Fragment, useEffect, useState, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
 import { kunciTahun } from '@/lib/tahunAjaran'
@@ -420,8 +421,8 @@ async function eksporProtaExcel(params: {
 
   rowsOut.push([])
   rowsOut.push([null, null, null, null, resolveTitiMangsa(profil)])
-  rowsOut.push([null, null, null, null, 'Mengetahui,'])
-  rowsOut.push(['Kepala Sekolah / Pimpinan,', null, null, null, 'Guru Mata Pelajaran,'])
+  rowsOut.push(['Mengetahui,', null, null, null, 'Guru Mata Pelajaran,'])
+  rowsOut.push(['Kepala Sekolah / Pimpinan,'])
   rowsOut.push([''])
   rowsOut.push([''])
   rowsOut.push([''])
@@ -518,8 +519,8 @@ async function eksporPromesExcel(params: {
   rowsOut.push([])
 
   rowsOut.push([null, null, null, null, resolveTitiMangsa(profil)])
-  rowsOut.push([null, null, null, null, 'Mengetahui,'])
-  rowsOut.push(['Kepala Sekolah / Pimpinan,', null, null, null, 'Guru Mata Pelajaran,'])
+  rowsOut.push(['Mengetahui,', null, null, null, 'Guru Mata Pelajaran,'])
+  rowsOut.push(['Kepala Sekolah / Pimpinan,'])
   rowsOut.push([''])
   rowsOut.push([''])
   rowsOut.push([''])
@@ -547,10 +548,11 @@ async function eksporProtaPDF(params: {
   rows: (ProtaRow & AlokasiInput)[]
   capJpSem1: number
   capJpSem2: number
-}) {
+  mode?: 'unduh' | 'preview'
+}): Promise<string | void> {
   const { default: jsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
-  const { profil, namaGuru, nuptk, namaMapel, namaKelas, tahunAjaran, rows, capJpSem1, capJpSem2 } = params
+  const { profil, namaGuru, nuptk, namaMapel, namaKelas, tahunAjaran, rows, capJpSem1, capJpSem2, mode = 'unduh' } = params
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
   const pageW = doc.internal.pageSize.width
@@ -559,7 +561,7 @@ async function eksporProtaPDF(params: {
   const contentWidth = pageW - mL - mR
   let curY = 14
 
-  doc.setLineWidth(1); doc.setDrawColor(30, 58, 138)
+  doc.setLineWidth(1); doc.setDrawColor(0, 0, 0)
   doc.line(mL, curY, pageW - mR, curY); curY += 5
   doc.setFontSize(14); doc.setFont('times', 'bold'); doc.setTextColor(15, 23, 42)
   doc.text('PROGRAM TAHUNAN', pageW / 2, curY, { align: 'center' }); curY += 6
@@ -571,14 +573,16 @@ async function eksporProtaPDF(params: {
     const alamatLines = doc.splitTextToSize(profil.alamat, contentWidth - 10)
     doc.text(alamatLines, pageW / 2, curY, { align: 'center' }); curY += alamatLines.length * 3.6 + 1
   }
-  doc.setLineWidth(0.5); doc.setDrawColor(30, 58, 138)
+  doc.setLineWidth(0.5); doc.setDrawColor(0, 0, 0)
   doc.line(mL, curY, pageW - mR, curY); curY += 5
 
   doc.setFont('times', 'normal'); doc.setFontSize(9); doc.setTextColor(15, 23, 42)
-  ;[`Mata Pelajaran : ${namaMapel}`, `Kelas / Rombel : ${namaKelas}`, `Tahun Ajaran   : ${tahunAjaran}`]
-    .forEach(line => {
-      const lines = doc.splitTextToSize(line, contentWidth)
-      doc.text(lines, mL, curY)
+  const labelWProta = 34
+  ;[['Mata Pelajaran', namaMapel], ['Kelas / Rombel', namaKelas], ['Tahun Ajaran', tahunAjaran]]
+    .forEach(([label, value]) => {
+      doc.text(label, mL, curY)
+      const lines = doc.splitTextToSize(`: ${value}`, contentWidth - labelWProta)
+      doc.text(lines, mL + labelWProta, curY)
       curY += lines.length * 4.5
     })
   curY += 2
@@ -614,7 +618,7 @@ async function eksporProtaPDF(params: {
     startY: curY,
     head: [['Semester', 'Elemen', 'Materi', 'Tujuan Pembelajaran', 'Alokasi Waktu (JP)']],
     body,
-    headStyles: { font: 'times', fillColor: [106, 25, 125], textColor: 255, fontStyle: 'bold', fontSize: 8, halign: 'center' },
+    headStyles: { font: 'times', fillColor: [237, 227, 243], textColor: [30, 10, 40], fontStyle: 'bold', fontSize: 8, halign: 'center' },
     bodyStyles: { font: 'times', fontSize: 7.5, valign: 'middle', overflow: 'linebreak' },
     columnStyles: {
       0: { cellWidth: wSemester, fontStyle: 'bold', textColor: [106, 25, 125] as unknown as string },
@@ -640,27 +644,32 @@ async function eksporProtaPDF(params: {
 
   const titiMangsa = resolveTitiMangsa(profil)
   const ttdColW = 60
+
+  // Kepala Sekolah/Pimpinan ("Mengetahui") SELALU di KIRI, Guru Mapel di
+  // KANAN -- titimangsa sejajar dengan kolom KANAN (Guru). Tanpa garis TTD.
   doc.setFont('times', 'normal'); doc.setFontSize(9); doc.setTextColor(15, 23, 42)
   doc.text('Mengetahui,', mL, ttdY)
   doc.text('Kepala Sekolah / Pimpinan,', mL, ttdY + 5)
-  doc.setLineWidth(0.3); doc.setDrawColor(180, 180, 180)
-  doc.line(mL, ttdY + 35, mL + ttdColW, ttdY + 35)
   doc.setFont('times', 'bold')
   const namaKepalaLines = doc.splitTextToSize(profil.namaKepala || '(Nama Kepala Sekolah)', ttdColW)
   doc.text(namaKepalaLines, mL, ttdY + 39)
-  if (profil.nip) { doc.setFont('times', 'normal'); doc.setFontSize(8.5); doc.text(`NUPTK: ${profil.nuptk || profil.nip}`, mL, ttdY + 39 + namaKepalaLines.length * 4) }
+  doc.setFont('times', 'normal'); doc.setFontSize(8.5)
+  doc.text(`NUPTK: ${profil.nuptk || profil.nip || '-'}`, mL, ttdY + 39 + namaKepalaLines.length * 4)
 
   const ttdX2 = pageW - mR - ttdColW
   doc.setFont('times', 'normal'); doc.setFontSize(9)
   const titiMangsaLines = doc.splitTextToSize(titiMangsa, ttdColW)
   doc.text(titiMangsaLines, ttdX2, ttdY)
   doc.text('Guru Mata Pelajaran,', ttdX2, ttdY + 4 + (titiMangsaLines.length - 1) * 4)
-  doc.line(ttdX2, ttdY + 35, ttdX2 + ttdColW, ttdY + 35)
   doc.setFont('times', 'bold')
   const namaGuruLines = doc.splitTextToSize(namaGuru || '(Nama Guru)', ttdColW)
   doc.text(namaGuruLines, ttdX2, ttdY + 39)
-  if (nuptk) { doc.setFont('times', 'normal'); doc.setFontSize(8.5); doc.text(`NUPTK: ${nuptk}`, ttdX2, ttdY + 39 + namaGuruLines.length * 4) }
+  doc.setFont('times', 'normal'); doc.setFontSize(8.5)
+  doc.text(`NUPTK: ${nuptk || '-'}`, ttdX2, ttdY + 39 + namaGuruLines.length * 4)
 
+  if (mode === 'preview') {
+    return doc.output('bloburl') as unknown as string
+  }
   doc.save(`Prota_${namaMapel}_${namaKelas}_${tahunAjaran.replace('/', '-')}.pdf`)
 }
 
@@ -679,12 +688,14 @@ async function eksporPromesPDF(params: {
   weeksByBulan: Record<string, MingguKapasitas[]>
   alokasiMingguan: Record<string, Record<string, number>>
   capJpEfektif: number
-}) {
+  mode?: 'unduh' | 'preview'
+}): Promise<string | void> {
   const { default: jsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
   const {
     profil, namaGuru, nuptk, namaMapel, namaKelas, tahunAjaran, semester,
     rows, alokasiJpPerMinggu, weeksByBulan, alokasiMingguan, capJpEfektif,
+    mode = 'unduh',
   } = params
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
@@ -706,7 +717,7 @@ async function eksporPromesPDF(params: {
   }
 
   let curY = 12
-  doc.setLineWidth(1); doc.setDrawColor(30, 58, 138)
+  doc.setLineWidth(1); doc.setDrawColor(0, 0, 0)
   doc.line(mL, curY, pageW - mR, curY); curY += 4
   doc.setFontSize(13); doc.setFont('times', 'bold'); doc.setTextColor(15, 23, 42)
   doc.text('PROGRAM SEMESTER', pageW / 2, curY, { align: 'center' }); curY += 5
@@ -718,16 +729,21 @@ async function eksporPromesPDF(params: {
     const alamatLines = doc.splitTextToSize(profil.alamat, contentWidth - 20)
     doc.text(alamatLines, pageW / 2, curY, { align: 'center' }); curY += alamatLines.length * 3.3 + 1
   }
-  doc.setLineWidth(0.5); doc.setDrawColor(30, 58, 138)
+  doc.setLineWidth(0.5); doc.setDrawColor(0, 0, 0)
   doc.line(mL, curY, pageW - mR, curY); curY += 3
 
   doc.setFont('times', 'bold'); doc.setFontSize(8); doc.setTextColor(15, 23, 42)
   const kolKananX = mL + contentWidth / 2
-  doc.text(doc.splitTextToSize(`Mata Pelajaran : ${namaMapel}`, contentWidth / 2 - 4), mL, curY)
-  doc.text(doc.splitTextToSize(`Kelas : ${namaKelas}`, contentWidth / 2 - 4), kolKananX, curY); curY += 4
-  doc.text(`Tahun Ajaran : ${tahunAjaran}`, mL, curY)
-  doc.text(`Semester : ${semLabel}`, kolKananX, curY); curY += 4
-  doc.text(`Alokasi Waktu : ${alokasiJpPerMinggu} jam/minggu`, mL, curY); curY += 4
+  const labelWPromes = 30
+  const barisInfoPromes = (label: string, value: string, x: number, yy: number) => {
+    doc.text(label, x, yy)
+    doc.text(`: ${value}`, x + labelWPromes, yy)
+  }
+  barisInfoPromes('Mata Pelajaran', namaMapel, mL, curY)
+  barisInfoPromes('Kelas', namaKelas, kolKananX, curY); curY += 4
+  barisInfoPromes('Tahun Ajaran', tahunAjaran, mL, curY)
+  barisInfoPromes('Semester', semLabel, kolKananX, curY); curY += 4
+  barisInfoPromes('Alokasi Waktu', `${alokasiJpPerMinggu} jam/minggu`, mL, curY); curY += 4
 
   const headRow1 = ['No', 'Elemen/Materi', 'Tujuan Pembelajaran', 'Jml\n(JP)']
   bulanList.forEach(bln => headRow1.push(bln, '', '', '', ''))
@@ -780,7 +796,7 @@ async function eksporPromesPDF(params: {
     startY: curY,
     head: [headRow1, headRow2],
     body,
-    headStyles: { font: 'times', fillColor: [106, 25, 125], textColor: 255, fontStyle: 'bold', fontSize: 6.5, halign: 'center', valign: 'middle' },
+    headStyles: { font: 'times', fillColor: [237, 227, 243], textColor: [30, 10, 40], fontStyle: 'bold', fontSize: 6.5, halign: 'center', valign: 'middle' },
     bodyStyles: { font: 'times', fontSize: 6.5, valign: 'middle', overflow: 'linebreak' },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     columnStyles: lebarKolom.reduce((acc: any, col, idx) => { acc[idx] = col; return acc }, {}),
@@ -802,35 +818,38 @@ async function eksporPromesPDF(params: {
   doc.setFont('times', 'bold'); doc.setFontSize(8); doc.setTextColor(15, 23, 42)
   doc.text(`Jumlah Jam Efektif       : ${capJpEfektif} JP`, mL, afterTableY); afterTableY += 5
   doc.text(`Jumlah Jam Cadangan    : ${jpCadangan} JP`, mL, afterTableY); afterTableY += 5
-  doc.setTextColor(106, 25, 125)
+  doc.setTextColor(0, 0, 0)
   doc.text(`Jumlah Jam Total Semester ${semLabel} : ${capJpEfektif} JP`, mL, afterTableY); afterTableY += 8
 
   if (afterTableY + 50 > pageH) { doc.addPage(); afterTableY = 15 }
   const titiMangsa = resolveTitiMangsa(profil)
   const ttdColW = 55
+
+  // Kepala Sekolah/Pimpinan ("Mengetahui") SELALU di KIRI, Guru Mapel di
+  // KANAN -- titimangsa sejajar kolom KANAN (Guru). Tanpa garis TTD.
   doc.setFont('times', 'normal'); doc.setFontSize(8.5); doc.setTextColor(15, 23, 42)
   doc.text('Mengetahui,', mL, afterTableY)
   doc.text('Kepala Sekolah / Pimpinan,', mL, afterTableY + 4)
-  doc.setLineWidth(0.3); doc.setDrawColor(180, 180, 180)
-  doc.line(mL, afterTableY + 30, mL + ttdColW, afterTableY + 30)
   doc.setFont('times', 'bold'); doc.setFontSize(8.5)
   const namaKepalaLines = doc.splitTextToSize(profil.namaKepala || '(Nama Kepala Sekolah)', ttdColW)
   doc.text(namaKepalaLines, mL, afterTableY + 34)
   doc.setFont('times', 'normal'); doc.setFontSize(8)
-  if (profil.nip) doc.text(`NUPTK: ${profil.nuptk || profil.nip || '-'}`, mL, afterTableY + 34 + namaKepalaLines.length * 4)
+  doc.text(`NUPTK: ${profil.nuptk || profil.nip || '-'}`, mL, afterTableY + 34 + namaKepalaLines.length * 4)
 
   const ttdX2 = pageW - mR - ttdColW
   doc.setFontSize(8.5)
   const titiMangsaLines = doc.splitTextToSize(titiMangsa, ttdColW)
   doc.text(titiMangsaLines, ttdX2, afterTableY)
   doc.text('Guru Mata Pelajaran,', ttdX2, afterTableY + 4 + (titiMangsaLines.length - 1) * 4)
-  doc.line(ttdX2, afterTableY + 30, ttdX2 + ttdColW, afterTableY + 30)
   doc.setFont('times', 'bold')
   const namaGuruLines = doc.splitTextToSize(namaGuru || '(Nama Guru)', ttdColW)
   doc.text(namaGuruLines, ttdX2, afterTableY + 34)
   doc.setFont('times', 'normal'); doc.setFontSize(8)
-  if (nuptk) doc.text(`NUPTK: ${nuptk}`, ttdX2, afterTableY + 34 + namaGuruLines.length * 4)
+  doc.text(`NUPTK: ${nuptk || '-'}`, ttdX2, afterTableY + 34 + namaGuruLines.length * 4)
 
+  if (mode === 'preview') {
+    return doc.output('bloburl') as unknown as string
+  }
   doc.save(`Promes_${semLabel}_${namaMapel}_${namaKelas}_${tahunAjaran.replace('/', '-')}.pdf`)
 }
 
@@ -876,8 +895,19 @@ export default function ProtaPromesPage() {
   const [filterGuruId, setFilterGuruId] = useState('')
   const [filterMapelId, setFilterMapelId] = useState('')
   const [filterRombelId, setFilterRombelId] = useState('')
+  const [filterUnitId, setFilterUnitId] = useState('') // '' = Lembaga Pusat
+  const [daftarLembaga, setDaftarLembaga] = useState<any[]>([])
+  const [daftarTingkat, setDaftarTingkat] = useState<any[]>([])
 
   const [loadingEkspor, setLoadingEkspor] = useState<string | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const previewRef = useRef<string | null>(null)
+  const tampilkanPratinjau = (url: string) => {
+    if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+    previewRef.current = url
+    setPreviewUrl(url)
+  }
+  useEffect(() => { return () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current) } }, [])
   const [tabView, setTabView] = useState<'preview-prota' | 'preview-promes1' | 'preview-promes2'>('preview-prota')
 
   // Input guru: HANYA alokasi JP per baris TP — key: prota_alokasi_<mapelId>_<rombelId>
@@ -929,33 +959,43 @@ export default function ProtaPromesPage() {
 
       setLoading(false)
 
-      // Kalau yang login adalah Guru (bukan Admin), kunci filter Guru ke
-      // dirinya sendiri -- tidak bisa memilih/lihat data guru lain sama sekali.
+      const sl = localStorage.getItem('daftar_lembaga')
+      const parsedLembaga = sl ? JSON.parse(sl) : []
+      setDaftarLembaga(parsedLembaga)
+      const stg = localStorage.getItem('master_tingkat')
+      if (stg) setDaftarTingkat(JSON.parse(stg))
+
+      // Kalau yang login adalah Guru (bukan Admin), kunci filter Guru & Unit ke
+      // dirinya sendiri -- tidak bisa memilih/lihat data guru/unit lain sama sekali.
       const cakupan = getCakupanMengajarGuru()
       if (cakupan?.guruId) {
         setFilterGuruId(cakupan.guruId)
+        const sgRaw = localStorage.getItem('master_guru')
+        const guruSendiri = sgRaw ? JSON.parse(sgRaw).find((g: any) => g.id === cakupan.guruId) : null
+        if (guruSendiri?.unitIds?.[0]) setFilterUnitId(guruSendiri.unitIds[0])
       }
     }
     init()
   }, [router])
 
-  // Kepala Sekolah/Mudir dideteksi OTOMATIS dari Identitas Lembaga & Kelola
-  // Data Guru -- mengikuti unit tempat guru yang sedang difilter bertugas.
-  // Tidak ada lagi input manual nama Kepala Sekolah di halaman ini.
+  // Kepala Sekolah/Mudir & Nama Satuan Pendidikan dideteksi OTOMATIS dari
+  // Identitas Lembaga -- mengikuti Unit yang dipilih di filter ("" = Lembaga
+  // Pusat/Mudir, unit tertentu = Kepala Sekolah unit itu). Tidak ada lagi
+  // input manual nama Kepala Sekolah / Nama Sekolah di halaman ini.
   useEffect(() => {
     const identitas = ambilIdentitasOtomatis()
     if (!identitas) return
 
-    const guruTerpilih = daftarGuru.find((g: any) => g.id === filterGuruId)
-    const unitIdGuru = guruTerpilih?.unitIds?.[0]
-    const unitData = unitIdGuru ? identitas.unitList.find(u => u.id === unitIdGuru) : undefined
+    const unitData = filterUnitId ? identitas.unitList.find(u => u.id === filterUnitId) : undefined
 
     setProfil(prev => ({
       ...prev,
-      namaKepala: unitData?.namaKepala || identitas.namaMudir || '',
-      nip: unitData?.nipKepala || identitas.nipMudir || '',
+      namaSekolah: filterUnitId ? (unitData?.nama || prev.namaSekolah) : (identitas.namaLembaga || prev.namaSekolah),
+      alamat: unitData?.alamat || identitas.alamat || prev.alamat,
+      namaKepala: filterUnitId ? (unitData?.namaKepala || '') : (identitas.namaMudir || ''),
+      nip: filterUnitId ? (unitData?.nipKepala || '') : (identitas.nipMudir || ''),
     }))
-  }, [filterGuruId, daftarGuru])
+  }, [filterUnitId])
 
   function simpanProfil() {
     localStorage.setItem('profil_titi_mangsa', profil.titiMangsa || '')
@@ -1106,7 +1146,7 @@ export default function ProtaPromesPage() {
     return { semInfo, bulanList, weeksByBulan, weeksFlat, rows, alokasi, totalDialokasikan, capJpEfektif, jpCadangan, getBulanKey }
   }
 
-  async function handleEkspor(jenis: string) {
+  async function handleEkspor(jenis: string, mode: 'unduh' | 'preview' = 'unduh') {
     if (!filterGuruId || !filterMapelId || !filterRombelId) {
       alert('Pilih Guru, Mata Pelajaran, dan Kelas terlebih dahulu.')
       return
@@ -1128,7 +1168,10 @@ export default function ProtaPromesPage() {
         capJpSem1,
         capJpSem2,
       }
-      if (jenis === 'prota-pdf') await eksporProtaPDF(common)
+      if (jenis === 'prota-pdf') {
+        const hasilUrl = await eksporProtaPDF({ ...common, mode })
+        if (mode === 'preview' && hasilUrl) tampilkanPratinjau(hasilUrl as string)
+      }
       else if (jenis === 'prota-xlsx') await eksporProtaExcel(common)
       else if (jenis === 'promes1-pdf' || jenis === 'promes1-xlsx' || jenis === 'promes2-pdf' || jenis === 'promes2-xlsx') {
         const semester: 'ganjil' | 'genap' = jenis.startsWith('promes1') ? 'ganjil' : 'genap'
@@ -1139,7 +1182,10 @@ export default function ProtaPromesPage() {
           rows: d.rows, alokasiJpPerMinggu, weeksByBulan: d.weeksByBulan, alokasiMingguan: d.alokasi,
           capJpEfektif: d.capJpEfektif,
         }
-        if (jenis.endsWith('pdf')) await eksporPromesPDF(paramsPromes)
+        if (jenis.endsWith('pdf')) {
+          const hasilUrl = await eksporPromesPDF({ ...paramsPromes, mode })
+          if (mode === 'preview' && hasilUrl) tampilkanPratinjau(hasilUrl as string)
+        }
         else await eksporPromesExcel({ ...paramsPromes, weeksFlat: d.weeksFlat })
       }
     } catch (err) {
@@ -1244,7 +1290,7 @@ export default function ProtaPromesPage() {
   // ─── RENDER ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-800">
+    <div className="flex flex-col md:flex-row min-h-screen bg-slate-50 text-slate-800">
       {/* FONT: Baloo 2 untuk teks tebal (heading, font-bold/black/semibold), Open Sans untuk teks tipis/isi */}
       <style jsx global>{`
         @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Open+Sans:wght@300;400;500;600&display=swap');
@@ -1338,12 +1384,28 @@ export default function ProtaPromesPage() {
           )}
         </section>
 
-        {/* ── FILTER GURU / MAPEL / KELAS ── */}
+        {/* ── FILTER LEMBAGA / GURU / MAPEL / KELAS ── */}
         <section className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-          <h2 className="text-sm font-bold text-slate-800 border-b border-slate-100 pb-3">Filter Guru, Mata Pelajaran &amp; Kelas</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <h2 className="text-sm font-bold text-slate-800 border-b border-slate-100 pb-3">Filter Lembaga, Guru, Mata Pelajaran &amp; Kelas</h2>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Guru</label>
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">1. Lembaga / Unit</label>
+              {cakupanGuru ? (
+                <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-slate-50 font-semibold text-slate-600">
+                  {daftarLembaga.find(u => u.id === filterUnitId)?.nama || 'Lembaga Pusat'} <span className="text-[9px] font-normal text-slate-400">(unit Anda)</span>
+                </div>
+              ) : (
+                <select value={filterUnitId} onChange={e => setFilterUnitId(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-[#6A197D]">
+                  <option value="">Lembaga Pusat (Mudir)</option>
+                  {daftarLembaga.map(u => <option key={u.id} value={u.id}>{u.nama}</option>)}
+                </select>
+              )}
+              <p className="text-[9px] text-slate-400 mt-1">Menentukan Guru/Kelas yang muncul, serta Kepala Sekolah/Mudir di tanda tangan.</p>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">2. Guru</label>
               {cakupanGuru ? (
                 <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-slate-50 font-semibold text-slate-600">
                   {guruTerpilih?.nama || 'Anda'} <span className="text-[9px] font-normal text-slate-400">(akun Anda)</span>
@@ -1352,12 +1414,16 @@ export default function ProtaPromesPage() {
                 <select value={filterGuruId} onChange={e => setFilterGuruId(e.target.value)}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-[#6A197D]">
                   <option value="">-- Pilih Guru --</option>
-                  {daftarGuru.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                  {(filterUnitId ? daftarGuru.filter((g: any) => (g.unitIds || []).includes(filterUnitId)) : daftarGuru).map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
                 </select>
               )}
+              <p className="text-[9px] text-slate-400 mt-1">Daftar mengikuti guru yang ditugaskan di Unit terpilih.</p>
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
             <div>
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Mata Pelajaran</label>
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">3. Mata Pelajaran</label>
               <select value={filterMapelId} onChange={e => setFilterMapelId(e.target.value)}
                 className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-[#6A197D]">
                 <option value="">-- Pilih Mapel --</option>
@@ -1369,17 +1435,24 @@ export default function ProtaPromesPage() {
                   return list.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)
                 })()}
               </select>
+              <p className="text-[9px] text-slate-400 mt-1">Otomatis mengikuti mapel yang diampu Guru terpilih.</p>
             </div>
             <div>
-              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Kelas / Rombel</label>
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">4. Kelas / Rombel</label>
               <select value={filterRombelId} onChange={e => setFilterRombelId(e.target.value)}
                 className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-[#6A197D]">
                 <option value="">-- Pilih Kelas --</option>
                 {(() => {
                   const punyaMappingRombel = !!guruTerpilih?.rombelIds?.length
-                  const list = (!filterGuruId || !punyaMappingRombel)
+                  let list = (!filterGuruId || !punyaMappingRombel)
                     ? daftarRombel
                     : daftarRombel.filter(r => guruTerpilih?.rombelIds?.includes(r.id))
+                  if (filterUnitId) {
+                    list = list.filter(r => {
+                      const t = daftarTingkat.find((tt: any) => tt.nama === r.tingkat)
+                      return t?.lembagaId === filterUnitId
+                    })
+                  }
                   return list.map(r => <option key={r.id} value={r.id}>Kelas {r.nama}</option>)
                 })()}
               </select>
@@ -1523,6 +1596,10 @@ export default function ProtaPromesPage() {
             <div className="border border-[#6A197D]/20 rounded-xl p-4 space-y-3 bg-[#6A197D]/12">
               <p className="text-xs font-black text-[#5b1774] uppercase tracking-wider">Program Tahunan (Prota)</p>
               <div className="flex gap-2">
+                <button onClick={() => handleEkspor('prota-pdf', 'preview')} disabled={loadingEkspor !== null}
+                  className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-lg text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 transition disabled:opacity-50" title="Pratinjau sebelum unduh">
+                  <Eye className="w-3.5 h-3.5" />
+                </button>
                 <button onClick={() => handleEkspor('prota-pdf')} disabled={loadingEkspor !== null}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition disabled:opacity-50">
                   <FileText className="w-3.5 h-3.5" /> {loadingEkspor === 'prota-pdf' ? 'Memproses...' : 'PDF'}
@@ -1537,6 +1614,10 @@ export default function ProtaPromesPage() {
             <div className="border border-[#6A197D]/20 rounded-xl p-4 space-y-3 bg-[#6A197D]/10">
               <p className="text-xs font-black text-[#5b1774] uppercase tracking-wider">Promes Semester 1 (Jul–Des)</p>
               <div className="flex gap-2">
+                <button onClick={() => handleEkspor('promes1-pdf', 'preview')} disabled={loadingEkspor !== null}
+                  className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-lg text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 transition disabled:opacity-50" title="Pratinjau sebelum unduh">
+                  <Eye className="w-3.5 h-3.5" />
+                </button>
                 <button onClick={() => handleEkspor('promes1-pdf')} disabled={loadingEkspor !== null}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition disabled:opacity-50">
                   <FileText className="w-3.5 h-3.5" /> {loadingEkspor === 'promes1-pdf' ? 'Memproses...' : 'PDF'}
@@ -1551,6 +1632,10 @@ export default function ProtaPromesPage() {
             <div className="border border-[#6A197D]/20 rounded-xl p-4 space-y-3 bg-[#6A197D]/10">
               <p className="text-xs font-black text-[#5b1774] uppercase tracking-wider">Promes Semester 2 (Jan–Jun)</p>
               <div className="flex gap-2">
+                <button onClick={() => handleEkspor('promes2-pdf', 'preview')} disabled={loadingEkspor !== null}
+                  className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-lg text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-600 transition disabled:opacity-50" title="Pratinjau sebelum unduh">
+                  <Eye className="w-3.5 h-3.5" />
+                </button>
                 <button onClick={() => handleEkspor('promes2-pdf')} disabled={loadingEkspor !== null}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition disabled:opacity-50">
                   <FileText className="w-3.5 h-3.5" /> {loadingEkspor === 'promes2-pdf' ? 'Memproses...' : 'PDF'}
@@ -1674,15 +1759,15 @@ export default function ProtaPromesPage() {
                       <p>Mengetahui,</p>
                       <p className="font-bold">Kepala Sekolah / Pimpinan,</p>
                       <div className="h-12" />
-                      <p className="font-bold border-t border-slate-400 pt-1 inline-block">{profil.namaKepala || '(Nama Kepala Sekolah)'}</p>
-                      {profil.nip && <p>NUPTK: {profil.nip}</p>}
+                      <p className="font-bold">{profil.namaKepala || '(Nama Kepala Sekolah)'}</p>
+                      <p>NUPTK: {profil.nip || '-'}</p>
                     </div>
                     <div className="space-y-1 text-right">
                       <p>{resolveTitiMangsa(profil)}</p>
                       <p className="font-bold">Guru Mata Pelajaran,</p>
                       <div className="h-12" />
-                      <p className="font-bold border-t border-slate-400 pt-1 inline-block">{guruTerpilih?.nama || '(Nama Guru)'}</p>
-                      {(guruTerpilih?.nip) && <p>NUPTK: {guruTerpilih.nip}</p>}
+                      <p className="font-bold">{guruTerpilih?.nama || '(Nama Guru)'}</p>
+                      <p>NUPTK: {guruTerpilih?.nip || '-'}</p>
                     </div>
                   </div>
                 )}
@@ -1698,15 +1783,15 @@ export default function ProtaPromesPage() {
                   <p>Mengetahui,</p>
                   <p className="font-bold">Kepala Sekolah / Pimpinan,</p>
                   <div className="h-12" />
-                  <p className="font-bold border-t border-slate-400 pt-1 inline-block">{profil.namaKepala || '(Nama Kepala Sekolah)'}</p>
-                  {profil.nip && <p>NUPTK: {profil.nip}</p>}
+                  <p className="font-bold">{profil.namaKepala || '(Nama Kepala Sekolah)'}</p>
+                  <p>NUPTK: {profil.nip || '-'}</p>
                 </div>
                 <div className="space-y-1 text-right">
                   <p>{resolveTitiMangsa(profil)}</p>
                   <p className="font-bold">Guru Mata Pelajaran,</p>
                   <div className="h-12" />
-                  <p className="font-bold border-t border-slate-400 pt-1 inline-block">{guruTerpilih?.nama || '(Nama Guru)'}</p>
-                  {guruTerpilih?.nip && <p>NUPTK: {guruTerpilih.nip}</p>}
+                  <p className="font-bold">{guruTerpilih?.nama || '(Nama Guru)'}</p>
+                  <p>NUPTK: {guruTerpilih?.nip || '-'}</p>
                 </div>
               </div>
             )}
@@ -1725,6 +1810,7 @@ export default function ProtaPromesPage() {
           </ul>
         </section>
       </main>
+      <PratinjauPdfModal url={previewUrl} onClose={() => setPreviewUrl(null)} judul="Pratinjau Prota / Promes" />
     </div>
   )
 }

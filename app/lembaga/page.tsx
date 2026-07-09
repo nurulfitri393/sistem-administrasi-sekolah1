@@ -17,13 +17,14 @@ export default function IdentitasLembagaPage() {
   
   // State Identitas Lembaga Yayasan Induk (Pusat) - Input manual nama Mudir dihilangkan
   const [identitasInduk, setIdentitasInduk] = useState({
-    nama: 'Lembaga / Yayasan Pusat', npsn: '', logo_utama: '', logo: '', kop: ''
+    nama: 'Lembaga / Yayasan Pusat', npsn: '', alamat: '', logo_utama: '', logo: '', kop: ''
   })
   
   // Master Unit Lembaga Cabang
   const [daftarLembaga, setDaftarLembaga] = useState<any[]>([])
   const [cabangDipilih, setCabangDipilih] = useState<any>(null)
   const [npsnCabang, setNpsnCabang] = useState('')
+  const [alamatCabang, setAlamatCabang] = useState('')
   const [logoCabang, setLogoCabang] = useState('')
   const [kopCabang, setKopCabang] = useState('')
 
@@ -46,6 +47,7 @@ export default function IdentitasLembagaPage() {
           setIdentitasInduk({
             nama: parsed.nama || '',
             npsn: parsed.npsn || '',
+            alamat: parsed.alamat || '',
             logo_utama: parsed.logo_utama || '',
             logo: parsed.logo || '',
             kop: parsed.kop || ''
@@ -107,7 +109,7 @@ export default function IdentitasLembagaPage() {
     if (!cabangDipilih) return
 
     const updated = daftarLembaga.map(item => item.id === cabangDipilih.id ? {
-      ...item, npsn: npsnCabang || '', logo: logoCabang || '', kop: kopCabang || ''
+      ...item, npsn: npsnCabang || '', alamat: alamatCabang || '', logo: logoCabang || '', kop: kopCabang || ''
     } : item)
 
     setDaftarLembaga(updated)
@@ -119,6 +121,7 @@ export default function IdentitasLembagaPage() {
     const found = daftarLembaga.find(u => u.id === id)
     setCabangDipilih(found || null)
     setNpsnCabang(found?.npsn || '')
+    setAlamatCabang(found?.alamat || '')
     setLogoCabang(found?.logo || '')
     setKopCabang(found?.kop || '')
   }
@@ -156,7 +159,7 @@ export default function IdentitasLembagaPage() {
   if (diizinkanAkses === false) return null
 
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-800 font-opensans">
+    <div className="flex flex-col md:flex-row min-h-screen bg-slate-50 text-slate-800 font-opensans">
       <Sidebar />
 
       <main className="flex-1 p-8 overflow-y-auto max-w-5xl mx-auto space-y-8">
@@ -181,6 +184,12 @@ export default function IdentitasLembagaPage() {
                    <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider mb-1 block">Nomor Pokok Sekolah Nasional (NPSN) Pusat</label>
                    <input type="text" placeholder="Masukkan Nomor NPSN Pusat" value={identitasInduk.npsn || ''} onChange={e => setIdentitasInduk({...identitasInduk, npsn: e.target.value})} className="w-full px-4 py-2.5 border rounded-xl text-sm font-medium bg-slate-50 outline-none focus:ring-2 focus:ring-[#8A3499] focus:bg-white" />
                 </div>
+             </div>
+
+             <div>
+                <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider mb-1 block">Alamat Lembaga Pusat</label>
+                <textarea rows={2} placeholder="Cth: Jl. Contoh No. 1, Kecamatan, Kota" value={identitasInduk.alamat || ''} onChange={e => setIdentitasInduk({...identitasInduk, alamat: e.target.value})} className="w-full px-4 py-2.5 border rounded-xl text-sm font-medium bg-slate-50 outline-none focus:ring-2 focus:ring-[#8A3499] focus:bg-white resize-none" />
+                <p className="text-[9px] text-slate-400 mt-1">Dipakai otomatis untuk kop dokumen cetak (Kaldik, Prota-Promes, dll) selama alamat unit di bawah belum diisi.</p>
              </div>
              
              {/* Blok Informasi Otomatis Mudir */}
@@ -250,6 +259,11 @@ export default function IdentitasLembagaPage() {
                           <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider mb-1 block">Nomor Pokok Sekolah Nasional (NPSN) Unit</label>
                           <input type="text" placeholder="Masukkan Nomor NPSN Unit Cabang" value={npsnCabang || ''} onChange={e => setNpsnCabang(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#8A3499]" />
                        </div>
+                    </div>
+
+                    <div>
+                       <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider mb-1 block">Alamat Unit Cabang</label>
+                       <textarea rows={2} placeholder="Kosongkan untuk memakai alamat Lembaga Pusat" value={alamatCabang || ''} onChange={e => setAlamatCabang(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#8A3499] resize-none" />
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

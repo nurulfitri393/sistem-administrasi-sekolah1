@@ -4,6 +4,7 @@ import { bisaMengeditModul } from '@/lib/aksesPeran'
 import CatatanHanyaLihat from '@/components/CatatanHanyaLihat'
 
 import Sidebar from '@/components/Sidebar'
+import PratinjauPdfModal from '@/components/PratinjauPdfModal'
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
@@ -12,7 +13,7 @@ import {
   Clock, Trash2, Landmark, LogOut, Shield, BookOpen, CheckCircle,
   Building, CalendarDays, BarChart2, FileText, FileSpreadsheet, Home,
   Wand2, RefreshCw, Plus, Edit2, Check, Users, Layers, X,
-  Download, Printer, RotateCcw, Calendar, Info, PenLine, ClipboardList, Ban
+  Download, Printer, RotateCcw, Calendar, Info, PenLine, ClipboardList, Ban, Eye
 } from 'lucide-react'
 
 // ============================================================
@@ -269,10 +270,10 @@ function generatePrintHtml(p: {
 
   // === Header kolom: Hari -> Rombel ===
   const thHari = hariList.map(h =>
-    `<th colspan="${rombelFiltered.length}" style="padding:4px 2px;font-size:9px;text-align:center;background:#6A197D;color:#fff;border:1px solid #450F52">${h.toUpperCase()}</th>`
+    `<th colspan="${rombelFiltered.length}" style="padding:4px 2px;font-size:9px;text-align:center;background:#EDE3F3;color:#1E0A28;border:1px solid #450F52">${h.toUpperCase()}</th>`
   ).join('')
   const thRombel = hariList.map(() =>
-    rombelFiltered.map((r: any) => `<th style="padding:3px 2px;font-size:8px;text-align:center;background:#450F52;color:#F0DFF5;border:1px solid #8A2FA0">${r.nama}</th>`).join('')
+    rombelFiltered.map((r: any) => `<th style="padding:3px 2px;font-size:8px;text-align:center;background:#EDE3F3;color:#1E0A28;border:1px solid #8A2FA0">${r.nama}</th>`).join('')
   ).join('')
 
   let istirahatIdx = 0
@@ -365,15 +366,15 @@ function generatePrintHtml(p: {
   const guruTableHtml = `
       <table style="flex:1;border-collapse:collapse;width:50%">
         <thead><tr>
-          <th style="padding:4px 6px;font-size:8px;background:#6A197D;color:#fff;border:1px solid #450F52;text-align:left">NAMA PENGAJAR</th>
-          <th style="padding:4px 6px;font-size:8px;background:#6A197D;color:#fff;border:1px solid #450F52;text-align:left">MATA PELAJARAN (KELAS)</th>
+          <th style="padding:4px 6px;font-size:8px;background:#EDE3F3;color:#1E0A28;border:1px solid #450F52;text-align:left">NAMA PENGAJAR</th>
+          <th style="padding:4px 6px;font-size:8px;background:#EDE3F3;color:#1E0A28;border:1px solid #450F52;text-align:left">MATA PELAJARAN (KELAS)</th>
         </tr></thead>
         <tbody>${renderGuruRows(colKiri)}</tbody>
       </table>
       <table style="flex:1;border-collapse:collapse;width:50%">
         <thead><tr>
-          <th style="padding:4px 6px;font-size:8px;background:#6A197D;color:#fff;border:1px solid #450F52;text-align:left">NAMA PENGAJAR</th>
-          <th style="padding:4px 6px;font-size:8px;background:#6A197D;color:#fff;border:1px solid #450F52;text-align:left">MATA PELAJARAN (KELAS)</th>
+          <th style="padding:4px 6px;font-size:8px;background:#EDE3F3;color:#1E0A28;border:1px solid #450F52;text-align:left">NAMA PENGAJAR</th>
+          <th style="padding:4px 6px;font-size:8px;background:#EDE3F3;color:#1E0A28;border:1px solid #450F52;text-align:left">MATA PELAJARAN (KELAS)</th>
         </tr></thead>
         <tbody>${renderGuruRows(colKanan)}</tbody>
       </table>`
@@ -382,7 +383,7 @@ function generatePrintHtml(p: {
   const piketHtml = `
       <table style="border-collapse:collapse;width:100%">
         <thead><tr>
-          ${LIST_HARI.slice(0, 5).map(h => `<th style="padding:3px 5px;font-size:7.5px;background:#6A197D;color:#fff;border:1px solid #450F52">${h}</th>`).join('')}
+          ${LIST_HARI.slice(0, 5).map(h => `<th style="padding:3px 5px;font-size:7.5px;background:#EDE3F3;color:#1E0A28;border:1px solid #450F52">${h}</th>`).join('')}
         </tr></thead>
         <tbody><tr>
           ${LIST_HARI.slice(0, 5).map(h => {
@@ -395,7 +396,7 @@ function generatePrintHtml(p: {
 
   // === Keterangan tambahan (kolom kanan, sejajar dengan Jadwal Piket Guru) ===
   const keteranganHtml = keterangan && keterangan.trim() ? `
-      <p style="font-size:8.5px;font-weight:900;color:#6A197D;margin-bottom:4px">Keterangan:</p>
+      <p style="font-size:8.5px;font-weight:900;color:#000;margin-bottom:4px">Keterangan:</p>
       <div style="font-size:8px;color:#374151;line-height:1.55;white-space:pre-line">${keterangan
         .split('\n')
         .filter(line => line.trim() !== '')
@@ -403,23 +404,22 @@ function generatePrintHtml(p: {
         .join('\n')}</div>` : ''
 
   // === Tanda Tangan ===
-  // Ditempatkan sebagai KOLOM SEMPIT DI KANAN (bukan baris penuh terpisah di bawah)
-  // supaya halaman cetak tidak bertambah panjang ke bawah — meniru layout contoh PDF.
-  // Jadwal KESELURUHAN (tampilkanWakaKurikulum=false): cukup 1 kolom Mudir, tidak ada Waka Kurikulum.
-  // Jadwal UNIT (tampilkanWakaKurikulum=true): 2 sub-kolom mini -- Kepala Satuan & Waka Kurikulum.
+  // Aturan (sama di semua dokumen unduhan): Kepala Sekolah/Kepala Satuan
+  // ("Mengetahui") SELALU di KIRI. Pihak lain (Waka Kurikulum) di KANAN,
+  // dan titimangsa sejajar dengan kolom KANAN itu.
   const ttdHtml = tampilkanWakaKurikulum ? `
-    <div style="width:215px;flex-shrink:0;text-align:center">
-      <p style="font-size:7.5px;margin-bottom:2px">${ttd.tempat || ''}, ${ttd.tanggal || ''}</p>
-      <p style="font-size:7.5px;margin-bottom:4px">Mengetahui,</p>
+    <div style="width:215px;flex-shrink:0">
       <div style="display:flex;gap:4px">
         <div style="flex:1;text-align:center">
-          <p style="font-size:6.8px;margin-bottom:26px;line-height:1.3">${penandatangan.kepala.label || ''}</p>
-          <p style="font-size:6.8px;font-weight:700;text-decoration:underline">${penandatangan.kepala.nama || ''}</p>
+          <p style="font-size:7.5px;margin-bottom:4px">Mengetahui,</p>
+          <p style="font-size:6.8px;margin-bottom:19px;line-height:1.3">${penandatangan.kepala.label || ''}</p>
+          <p style="font-size:6.8px;font-weight:700">${penandatangan.kepala.nama || ''}</p>
           <p style="font-size:6.3px">NUPTK: ${penandatangan.kepala.nuptk || '-'}</p>
         </div>
         <div style="flex:1;text-align:center">
+          <p style="font-size:7.5px;margin-bottom:2px;white-space:nowrap">${ttd.tempat || ''}, ${ttd.tanggal || ''}</p>
           <p style="font-size:6.8px;margin-bottom:26px;line-height:1.3">${penandatangan.wakaKurikulum.label || ''}</p>
-          <p style="font-size:6.8px;font-weight:700;text-decoration:underline">${penandatangan.wakaKurikulum.nama || ''}</p>
+          <p style="font-size:6.8px;font-weight:700">${penandatangan.wakaKurikulum.nama || ''}</p>
           <p style="font-size:6.3px">NUPTK: ${penandatangan.wakaKurikulum.nuptk || '-'}</p>
         </div>
       </div>
@@ -427,8 +427,8 @@ function generatePrintHtml(p: {
     <div style="width:170px;flex-shrink:0;text-align:center">
       <p style="font-size:7.5px;margin-bottom:2px">${ttd.tempat || ''}, ${ttd.tanggal || ''}</p>
       <p style="font-size:7.5px;margin-bottom:28px;line-height:1.3">Mengetahui,<br/>${penandatangan.kepala.label || ''}</p>
-      <p style="font-size:7.5px;font-weight:700;text-decoration:underline">${penandatangan.kepala.nama || ''}</p>
-      <p style="font-size:7px">NUPTK: ${penandatangan.kepala.nuptk || '-'}</p>
+      <p style="font-size:7.5px;font-weight:700">${penandatangan.kepala.nama || ''}</p>
+      ${(penandatangan.kepala.label || '').toLowerCase().includes('mudir') ? '' : `<p style="font-size:7px">NUPTK: ${penandatangan.kepala.nuptk || '-'}</p>`}
     </div>`
 
   return `<!DOCTYPE html>
@@ -439,15 +439,15 @@ function generatePrintHtml(p: {
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Times New Roman', Times, serif; font-size: 9px; background: #fff; color:#111; }
-  .header { display: flex; align-items: center; gap: 14px; border-bottom: 3px solid #6A197D; padding-bottom: 8px; margin-bottom: 8px; width: 100%; }
+  .header { display: flex; align-items: center; gap: 14px; border-bottom: 3px solid #000; padding-bottom: 8px; margin-bottom: 8px; width: 100%; }
   .header img { width: 56px; height: 56px; object-fit: contain; flex-shrink: 0; }
   .header-logo-slot { width: 56px; height: 56px; flex-shrink: 0; }
   .header-text { flex: 1; text-align: center; }
-  .header-text h1 { font-size: 11px; font-weight: 900; text-transform: uppercase; color: #6A197D; line-height: 1.35; white-space: pre-line; }
-  .header-text h2 { font-size: 12px; font-weight: 900; color: #6A197D; margin-top: 2px; text-transform:uppercase; }
+  .header-text h1 { font-size: 11px; font-weight: 900; text-transform: uppercase; color: #000; line-height: 1.35; white-space: pre-line; }
+  .header-text h2 { font-size: 12px; font-weight: 900; color: #000; margin-top: 2px; text-transform:uppercase; }
   .header-text p { font-size: 9px; color: #374151; margin-top: 1px; }
-  .meta-row { display:flex; justify-content:space-between; font-size:9px; font-weight:700; color:#6A197D; margin-bottom:6px; }
-  .judul-jadwal { text-align:center; font-size:11px; font-weight:900; color:#6A197D; text-transform:uppercase; margin: 6px 0 8px; }
+  .meta-row { display:flex; justify-content:space-between; font-size:9px; font-weight:700; color:#000; margin-bottom:6px; }
+  .judul-jadwal { text-align:center; font-size:11px; font-weight:900; color:#000; text-transform:uppercase; margin: 6px 0 8px; }
   table { border-collapse: collapse; width: 100%; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } @page { size: A4 landscape; margin: 10mm; } }
 </style>
@@ -473,7 +473,7 @@ function generatePrintHtml(p: {
   <table style="width:100%;table-layout:fixed">
     <thead>
       <tr>
-        <th rowspan="2" style="padding:4px;font-size:9px;background:#6A197D;color:#fff;border:1px solid #450F52;width:62px">WAKTU</th>
+        <th rowspan="2" style="padding:4px;font-size:9px;background:#EDE3F3;color:#1E0A28;border:1px solid #450F52;width:62px">WAKTU</th>
         ${thHari}
       </tr>
       <tr>${thRombel}</tr>
@@ -492,7 +492,7 @@ function generatePrintHtml(p: {
   <!-- Baris 2: Jadwal Piket Guru (kiri, sempit) + Keterangan (kanan, mengisi sisa lebar) -->
   <div style="display:flex;gap:16px;margin-top:10px;align-items:flex-start">
     <div style="width:42%">
-      <div style="font-size:8px;font-weight:700;color:#6A197D;margin-bottom:4px">JADWAL PIKET GURU</div>
+      <div style="font-size:8px;font-weight:700;color:#000;margin-bottom:4px">JADWAL PIKET GURU</div>
       ${piketHtml}
     </div>
     <div style="flex:1">
@@ -534,7 +534,7 @@ function generatePrintHtmlGuru(p: {
   const infoKiri = `
     <div>
       <p style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Nama Guru</p>
-      <p style="font-size:17px;font-weight:900;color:#6A197D;margin-bottom:6px">${guru.nama}</p>
+      <p style="font-size:17px;font-weight:900;color:#000;margin-bottom:6px">${guru.nama}</p>
       ${guru.nip ? `<p style="font-size:13px;font-weight:600;color:#374151">NIP/NUPTK: ${guru.nip}</p>` : ''}
       <p style="font-size:13px;font-weight:600;color:#374151;margin-top:2px">Total Mengajar: <strong>${totalJp} JP / minggu</strong></p>
     </div>`
@@ -542,12 +542,12 @@ function generatePrintHtmlGuru(p: {
   const infoKanan = `
     <div style="text-align:right">
       <p style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Mata Pelajaran</p>
-      ${mapelDiampu.map((m: any) => `<p style="font-size:14px;font-weight:700;color:#6A197D;line-height:1.5">${m.nama}</p>`).join('')}
+      ${mapelDiampu.map((m: any) => `<p style="font-size:14px;font-weight:700;color:#000;line-height:1.5">${m.nama}</p>`).join('')}
     </div>`
 
   // ── Tabel jadwal utama ─────────────────────────────────────────────────────
   const thHari = LIST_HARI.map(h =>
-    `<th style="padding:8px 6px;font-size:14px;font-weight:900;background:#6A197D;color:#fff;border:1px solid #450F52;text-align:center;vertical-align:middle">${h}</th>`
+    `<th style="padding:8px 6px;font-size:14px;font-weight:900;background:#EDE3F3;color:#1E0A28;border:1px solid #450F52;text-align:center;vertical-align:middle">${h}</th>`
   ).join('')
 
   const rowsHtml = allSlots.map(slot => {
@@ -567,7 +567,7 @@ function generatePrintHtmlGuru(p: {
       const rombel = daftarRombel.find((r: any) => r.id === j.rombelId)
       const mapel = daftarMapel.find((m: any) => m.id === j.mapelId)
       return `<td style="padding:8px 6px;border:1px solid #d1d5db;text-align:center;vertical-align:middle;background:#eef2ff;min-width:80px">
-        <span style="font-size:14px;font-weight:900;display:block;line-height:1.3;color:#6A197D">${rombel?.nama || '-'}</span>
+        <span style="font-size:14px;font-weight:900;display:block;line-height:1.3;color:#000">${rombel?.nama || '-'}</span>
         <span style="font-size:12px;font-weight:600;display:block;line-height:1.35;margin-top:3px;white-space:normal;word-break:break-word;color:#374151">${mapel?.nama || '-'}</span>
       </td>`
     }).join('')
@@ -599,7 +599,7 @@ function generatePrintHtmlGuru(p: {
   // ── Keterangan ─────────────────────────────────────────────────────────────
   const keteranganHtml = keterangan && keterangan.trim() ? `
     <div style="margin-top:14px;padding:9px 12px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc">
-      <p style="font-size:14px;font-weight:900;color:#6A197D;margin-bottom:5px">Keterangan:</p>
+      <p style="font-size:14px;font-weight:900;color:#000;margin-bottom:5px">Keterangan:</p>
       <div style="font-size:13px;color:#374151;line-height:1.6;white-space:pre-line">${keterangan
         .split('\n').filter(l => l.trim()).map((l, i) => `${i + 1}. ${l.replace(/^\d+\.\s*/, '')}`).join('\n')}</div>
     </div>` : ''
@@ -615,7 +615,7 @@ function generatePrintHtmlGuru(p: {
   table { border-collapse: collapse; width:100%; table-layout:fixed; }
   td, th { vertical-align: middle; word-break: break-word; }
   .page-wrap { padding: 14mm 14mm 10mm 14mm; }
-  .judul { text-align:center; font-size:20px; font-weight:900; color:#6A197D; text-transform:uppercase; padding-bottom:8px; border-bottom:3px solid #6A197D; margin-bottom:12px; }
+  .judul { text-align:center; font-size:20px; font-weight:900; color:#000; text-transform:uppercase; padding-bottom:8px; border-bottom:3px solid #000; margin-bottom:12px; }
   .kop-row { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px; gap:16px; }
   .tabel-jadwal-guru th:first-child,
   .tabel-jadwal-guru td:first-child { width:70px; }
@@ -637,7 +637,7 @@ function generatePrintHtmlGuru(p: {
   <table class="tabel-jadwal-guru" style="margin-bottom:14px">
     <thead>
       <tr>
-        <th style="padding:8px 4px;font-size:13px;font-weight:900;background:#6A197D;color:#fff;border:1px solid #450F52;text-align:center">Jam</th>
+        <th style="padding:8px 4px;font-size:13px;font-weight:900;background:#EDE3F3;color:#1E0A28;border:1px solid #450F52;text-align:center">Jam</th>
         ${thHari}
       </tr>
     </thead>
@@ -645,11 +645,11 @@ function generatePrintHtmlGuru(p: {
   </table>
 
   <div style="margin-bottom:12px">
-    ${piketLabel ? `<p style="font-size:14px;font-weight:700;color:#6A197D;margin-bottom:6px">${piketLabel}</p>` : ''}
+    ${piketLabel ? `<p style="font-size:14px;font-weight:700;color:#000;margin-bottom:6px">${piketLabel}</p>` : ''}
     <p style="font-size:13px;color:#374151;margin-bottom:6px">Apabila bapak/ibu berhalangan hadir, dapat menghubungi guru piket berikut:</p>
     <table style="table-layout:fixed">
       <thead>
-        <tr>${hariPiketKolom.map(h => `<th style="padding:7px 6px;font-size:13px;font-weight:800;background:#6A197D;color:#fff;border:1px solid #450F52;text-align:center">${h}</th>`).join('')}</tr>
+        <tr>${hariPiketKolom.map(h => `<th style="padding:7px 6px;font-size:13px;font-weight:800;background:#EDE3F3;color:#1E0A28;border:1px solid #450F52;text-align:center">${h}</th>`).join('')}</tr>
       </thead>
       <tbody>${piketTableRows}</tbody>
     </table>
@@ -725,6 +725,7 @@ export default function JadwalPelajaranPage() {
   const [waktuMulai, setWaktuMulai] = useState('07.30')
   const [waktuSelesai, setWaktuSelesai] = useState('08.10')
   const [jenisWaktu, setJenisWaktu] = useState<'mapel' | 'istirahat'>('mapel')
+  const [editWaktuId, setEditWaktuId] = useState<string | null>(null)
 
   // Form: Kelas Gabungan
   const [editGabId, setEditGabId] = useState<string | null>(null)
@@ -768,6 +769,9 @@ export default function JadwalPelajaranPage() {
   const [showDownloadGuruModal, setShowDownloadGuruModal] = useState(false)
   const [guruDownloadTarget, setGuruDownloadTarget] = useState<string>('semua-zip')
   const [sedangMengunduhGuru, setSedangMengunduhGuru] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const previewRef = useRef<string | null>(null)
+  useEffect(() => { return () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current) } }, [])
   const [progresUnduhGuru, setProgresUnduhGuru] = useState({ selesai: 0, total: 0 })
 
   // ============================================================
@@ -779,7 +783,7 @@ export default function JadwalPelajaranPage() {
       if (!session) { router.push('/'); return }
 
       const load = (key: string, setter: (v: any) => void, fallback: any = []) => {
-        const raw = localStorage.getItem(key)
+        const raw = localStorage.getItem(kunciAsli(key))
         setter(raw ? JSON.parse(raw) : fallback)
       }
 
@@ -855,7 +859,23 @@ export default function JadwalPelajaranPage() {
   // ============================================================
   // HELPERS UMUM
   // ============================================================
-  const save = (key: string, data: any) => localStorage.setItem(key, JSON.stringify(data))
+  // Kunci-kunci yang MERUPAKAN isian tahunan (harus diarsipkan per tahun ajaran).
+  // PENTING: sebelumnya fungsi save()/load() di bawah ini menulis LANGSUNG ke
+  // localStorage TANPA melalui kunciTahun() -- padahal modul lain (mis. Minggu
+  // Efektif) membaca data ini SUDAH dengan kunciTahun(). Akibatnya data jadwal,
+  // master waktu, dsb tidak pernah "ketemu" saat disilangkan modul lain, karena
+  // nama kuncinya beda (satu polos, satu berlabel tahun ajaran). Diperbaiki di
+  // sini secara terpusat, supaya SEMUA pemanggilan save('key', ...)/load('key', ...)
+  // di bawah otomatis konsisten tanpa perlu mengubah satu-satu titik pemanggilannya.
+  const KUNCI_TAHUN_JADWAL = new Set([
+    'data_jadwal_pelajaran', 'master_pemetaan_waktu', 'master_kelas_gabungan',
+    'master_jadwal_tetap', 'master_jadwal_giliran', 'master_larangan_beriringan',
+    'master_piket_guru', 'matriks_alokasi_rinci_samping', 'request_hari_jp_guru',
+    'jadwal_semester_aktif', 'jadwal_titimangsa_ttd', 'jadwal_keterangan_unit',
+    'master_maks_jp_guru_per_hari',
+  ])
+  const kunciAsli = (key: string) => KUNCI_TAHUN_JADWAL.has(key) ? kunciTahun(key) : key
+  const save = (key: string, data: any) => localStorage.setItem(kunciAsli(key), JSON.stringify(data))
 
   // --- Identitas & Kop: Lembaga Pusat (Yayasan) dan Unit ---
   const updateIdentitasIndukField = (field: string, value: string) => {
@@ -913,20 +933,46 @@ export default function JadwalPelajaranPage() {
   // ============================================================
   const handleSimpanWaktu = (e: React.FormEvent) => {
     e.preventDefault()
-    const w: WaktuSlot = {
-      id: 'waktu-' + Date.now(),
-      label: labelWaktu || (jenisWaktu === 'mapel' ? `Jam ke-${jamKeNomor}` : 'Istirahat'),
-      jamKe: jamKeNomor,
-      mulai: waktuMulai,
-      selesai: waktuSelesai,
-      jenis: jenisWaktu
+    let updated: WaktuSlot[]
+    if (editWaktuId) {
+      updated = daftarWaktu.map(w => w.id === editWaktuId ? {
+        ...w,
+        label: labelWaktu || (jenisWaktu === 'mapel' ? `Jam ke-${jamKeNomor}` : 'Istirahat'),
+        jamKe: jamKeNomor,
+        mulai: waktuMulai,
+        selesai: waktuSelesai,
+        jenis: jenisWaktu,
+      } : w)
+    } else {
+      const w: WaktuSlot = {
+        id: 'waktu-' + Date.now(),
+        label: labelWaktu || (jenisWaktu === 'mapel' ? `Jam ke-${jamKeNomor}` : 'Istirahat'),
+        jamKe: jamKeNomor,
+        mulai: waktuMulai,
+        selesai: waktuSelesai,
+        jenis: jenisWaktu
+      }
+      updated = [...daftarWaktu, w]
     }
-    const updated = [...daftarWaktu, w].sort((a, b) => {
+    updated = updated.sort((a, b) => {
       if (a.jenis === 'mapel' && b.jenis === 'mapel') return Number(a.jamKe) - Number(b.jamKe)
       return 0
     })
     setDaftarWaktu(updated); save('master_pemetaan_waktu', updated)
-    setLabelWaktu('')
+    setLabelWaktu(''); setEditWaktuId(null); setJamKeNomor('1'); setWaktuMulai('07.30'); setWaktuSelesai('08.10'); setJenisWaktu('mapel')
+  }
+
+  const handleEditWaktuClick = (w: WaktuSlot) => {
+    setEditWaktuId(w.id)
+    setJenisWaktu(w.jenis)
+    setJamKeNomor(String(w.jamKe || '1'))
+    setLabelWaktu(w.label || '')
+    setWaktuMulai(w.mulai)
+    setWaktuSelesai(w.selesai)
+  }
+
+  const handleBatalEditWaktu = () => {
+    setEditWaktuId(null); setLabelWaktu(''); setJamKeNomor('1'); setWaktuMulai('07.30'); setWaktuSelesai('08.10'); setJenisWaktu('mapel')
   }
 
   const handleHapusWaktu = (id: string) => {
@@ -1837,13 +1883,20 @@ export default function JadwalPelajaranPage() {
   }
 
   // Unduh jadwal SATU guru sebagai file PDF
-  const handleDownloadSatuGuru = async (guru: any) => {
+  const handleDownloadSatuGuru = async (guru: any, aksi: 'unduh' | 'preview' = 'unduh') => {
     setSedangMengunduhGuru(true)
     setProgresUnduhGuru({ selesai: 0, total: 1 })
     try {
       const html = buatHtmlJadwalSatuGuru(guru)
       const blob = await renderHtmlKePdfBlob(html, 'portrait')
       const url = URL.createObjectURL(blob)
+      if (aksi === 'preview') {
+        if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+        previewRef.current = url
+        setPreviewUrl(url)
+        setProgresUnduhGuru({ selesai: 1, total: 1 })
+        return
+      }
       const a = document.createElement('a')
       a.href = url
       a.download = `Jadwal Guru - ${namaFileAman(guru.nama)}.pdf`
@@ -1945,7 +1998,7 @@ export default function JadwalPelajaranPage() {
   // RENDER
   // ============================================================
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-800">
+    <div className="flex flex-col md:flex-row min-h-screen bg-slate-50 text-slate-800">
 
       {/* SIDEBAR */}
       <Sidebar />
@@ -2044,7 +2097,14 @@ export default function JadwalPelajaranPage() {
                   <input type="text" placeholder="08.10" value={waktuSelesai} onChange={e => setWaktuSelesai(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#8A2FA0]" required />
                 </div>
               </div>
-              <button type="submit" className="w-full bg-[#6A197D] text-white py-3 rounded-xl font-bold text-xs shadow-md hover:bg-[#571466] transition mt-2">+ Tambah Master Waktu</button>
+              <div className="flex gap-2">
+                <button type="submit" className="flex-1 bg-[#6A197D] text-white py-3 rounded-xl font-bold text-xs shadow-md hover:bg-[#571466] transition mt-2">
+                  {editWaktuId ? 'Simpan Perubahan' : '+ Tambah Master Waktu'}
+                </button>
+                {editWaktuId && (
+                  <button type="button" onClick={handleBatalEditWaktu} className="px-4 bg-slate-100 rounded-xl font-bold text-slate-600 text-xs mt-2">Batal</button>
+                )}
+              </div>
             </form>
             <div className="xl:col-span-2 space-y-4">
               <h2 className="text-xs font-black text-slate-600 uppercase tracking-wider pb-2 border-b border-slate-100">Tabel Master Waktu</h2>
@@ -2061,7 +2121,12 @@ export default function JadwalPelajaranPage() {
                         <td className="p-3"><span className={`px-2 py-0.5 rounded text-[9px] font-black border uppercase ${w.jenis === 'mapel' ? 'bg-[#F7ECFA] text-[#571466] border-[#F0DFF5]' : 'bg-amber-50 text-amber-700 border-amber-100'}`}>{w.jenis === 'mapel' ? `JP ${w.jamKe}` : 'Istirahat'}</span></td>
                         <td className="p-3 font-bold">{w.label}</td>
                         <td className="p-3 font-extrabold text-[#6A197D] tracking-wider">{w.mulai} – {w.selesai}</td>
-                        <td className="p-3 text-center"><button onClick={() => handleHapusWaktu(w.id)} className="p-1.5 text-slate-400 hover:text-red-500 rounded-lg transition"><Trash2 className="w-4 h-4" /></button></td>
+                        <td className="p-3 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button onClick={() => handleEditWaktuClick(w)} className="p-1.5 text-[#8A2FA0] hover:text-[#571466] rounded-lg transition"><Edit2 className="w-4 h-4" /></button>
+                            <button onClick={() => handleHapusWaktu(w.id)} className="p-1.5 text-slate-400 hover:text-red-500 rounded-lg transition"><Trash2 className="w-4 h-4" /></button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                     {!daftarWaktu.length && <tr><td colSpan={4} className="py-12 text-center text-slate-400 text-xs">Belum ada pemetaan waktu.</td></tr>}
@@ -3070,14 +3135,24 @@ export default function JadwalPelajaranPage() {
                         </td>
                         )}
                         <td className="p-4 text-center">
-                          <button
-                            onClick={() => handleDownloadSatuGuru(g)}
-                            disabled={sedangMengunduhGuru}
-                            title="Unduh PDF jadwal guru ini"
-                            className="p-2 text-[#8A2FA0] hover:text-[#571466] hover:bg-[#F7ECFA] rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            <Download className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => handleDownloadSatuGuru(g, 'preview')}
+                              disabled={sedangMengunduhGuru}
+                              title="Pratinjau jadwal guru ini"
+                              className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDownloadSatuGuru(g)}
+                              disabled={sedangMengunduhGuru}
+                              title="Unduh PDF jadwal guru ini"
+                              className="p-2 text-[#8A2FA0] hover:text-[#571466] hover:bg-[#F7ECFA] rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <Download className="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     )
@@ -3308,6 +3383,7 @@ export default function JadwalPelajaranPage() {
           </div>
         </div>
       )}
+      <PratinjauPdfModal url={previewUrl} onClose={() => setPreviewUrl(null)} judul="Pratinjau Jadwal Guru" />
     </div>
   )
 }
