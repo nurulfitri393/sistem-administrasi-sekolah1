@@ -5,7 +5,7 @@ import Sidebar from '@/components/Sidebar'
 import { supabase } from '@/app/supabase'
 import { useAksesGuard } from '@/lib/useAksesGuard'
 import { useRouter } from 'next/navigation'
-import { jalankanMigrasiArsipTahun, adaDataLamaBelumBermigrasi, type HasilMigrasiTahun } from '@/lib/migrasiTahunAjaran'
+import { jalankanMigrasiArsipTahun, adaDataLamaBelumBermigrasi, timpaPaksaSatuKunci, type HasilMigrasiTahun } from '@/lib/migrasiTahunAjaran'
 
 type Status = 'menunggu' | 'jalan' | 'lulus' | 'gagal'
 
@@ -34,12 +34,27 @@ export default function StatusSinkronisasiPage() {
 
   useEffect(() => {
     setAdaDataLama(adaDataLamaBelumBermigrasi())
+    // Migrasi ini aman & idempotent (hanya menyalin kalau kunci baru benar-benar
+    // kosong) -- dijalankan otomatis begitu halaman dibuka supaya detail
+    // perbandingan data lama vs baru langsung terlihat tanpa perlu klik dulu.
+    setHasilMigrasi(jalankanMigrasiArsipTahun())
   }, [])
 
   const handleMigrasi = () => {
     const hasil = jalankanMigrasiArsipTahun()
     setHasilMigrasi(hasil)
     setAdaDataLama(adaDataLamaBelumBermigrasi())
+  }
+
+  const handleTimpaPaksa = (kunci: string) => {
+    if (!confirm(`Yakin ingin menimpa data BARU pada "${kunci}" dengan data LAMA? Data baru yang sudah ada di kunci ini akan DIGANTI dan tidak bisa dikembalikan.`)) return
+    const berhasil = timpaPaksaSatuKunci(kunci)
+    if (berhasil) {
+      alert(`Berhasil menimpa "${kunci}". Silakan muat ulang halaman modul terkait untuk melihat hasilnya.`)
+      const hasil = jalankanMigrasiArsipTahun()
+      setHasilMigrasi(hasil)
+      setAdaDataLama(adaDataLamaBelumBermigrasi())
+    }
   }
   const [berjalan, setBerjalan] = useState(false)
   const [isAdminAsli, setIsAdminAsli] = useState<boolean | null>(null)
@@ -264,14 +279,30 @@ export default function StatusSinkronisasiPage() {
             Jalankan Pemulihan Data Lama
           </button>
           {hasilMigrasi && (
-            <div className="text-[11px] space-y-1.5 pt-2 border-t border-slate-200/70">
+            <div className="text-[11px] space-y-2.5 pt-2 border-t border-slate-200/70">
               {hasilMigrasi.disalin.length > 0 && (
                 <p className="text-emerald-700"><strong>Disalin ({hasilMigrasi.disalin.length}):</strong> {hasilMigrasi.disalin.join(', ')}</p>
               )}
               {hasilMigrasi.dilewati.length > 0 && (
-                <p className="text-slate-500"><strong>Dilewati, kunci baru sudah terisi ({hasilMigrasi.dilewati.length}):</strong> {hasilMigrasi.dilewati.join(', ')}</p>
+                <div className="space-y-1.5">
+                  <p className="text-slate-600 font-bold">Dilewati — kunci baru sudah ada isinya, bandingkan dulu sebelum menimpa:</p>
+                  {hasilMigrasi.dilewati.map(d => (
+                    <div key={d.kunci} className="flex items-center justify-between gap-3 bg-white rounded-lg border border-slate-200 px-3 py-2">
+                      <span>
+                        <strong>{d.kunci}</strong> — data lama: <strong>{d.jumlahLama} item</strong>, data baru saat ini: <strong>{d.jumlahBaru} item</strong>
+                        {d.jumlahLama > d.jumlahBaru && <span className="text-[#8A6D00] font-bold"> (data lama lebih banyak!)</span>}
+                      </span>
+                      <button
+                        onClick={() => handleTimpaPaksa(d.kunci)}
+                        className="shrink-0 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold px-3 py-1.5 rounded-lg text-[10px] transition"
+                      >
+                        Timpa dengan Data Lama
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
-              {hasilMigrasi.disalin.length === 0 && (
+              {hasilMigrasi.disalin.length === 0 && hasilMigrasi.dilewati.length === 0 && (
                 <p className="text-slate-500">Tidak ada data lama yang perlu disalin — semua kunci baru sudah terisi atau memang belum pernah ada data sama sekali.</p>
               )}
             </div>

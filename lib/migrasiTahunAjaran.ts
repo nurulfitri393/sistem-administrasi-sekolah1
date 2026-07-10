@@ -37,41 +37,90 @@ export const DAFTAR_KUNCI_TERDAMPAK_ARSIP_TAHUN = [
 
 export interface HasilMigrasiTahun {
   disalin: string[]      // kunci lama yang berhasil disalin ke kunci baru
-  dilewati: string[]     // kunci baru sudah ada isinya -> tidak ditimpa, dilewati
+  dilewati: { kunci: string; jumlahLama: number; jumlahBaru: number }[] // kunci baru sudah ada ISI SUNGGUHAN
   tidakAdaData: string[] // kunci lama memang kosong/tidak ada
 }
 
 /**
+ * Hitung "jumlah item" dari sebuah nilai localStorage untuk ditampilkan ke
+ * pengguna (array -> panjang array, objek -> jumlah key, lainnya -> 1/0).
+ */
+function jumlahItem(raw: string | null): number {
+  if (!raw) return 0
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) return parsed.length
+    if (parsed && typeof parsed === 'object') return Object.keys(parsed).length
+    return raw.trim() ? 1 : 0
+  } catch {
+    return raw.trim() ? 1 : 0
+  }
+}
+
+/**
+ * Cek apakah sebuah nilai localStorage "sebenarnya kosong" (null, string
+ * kosong, array [], atau objek {}) -- supaya tidak dianggap "sudah ada
+ * datanya" hanya karena pernah diinisialisasi kosong (mis. cloud sync
+ * sempat menyinkronkan array kosong sebelum migrasi sempat dijalankan).
+ */
+function nilaiBenarBenarKosong(raw: string | null): boolean {
+  if (!raw) return true
+  const trimmed = raw.trim()
+  if (trimmed === '' || trimmed === '[]' || trimmed === '{}' || trimmed === 'null') return true
+  try {
+    const parsed = JSON.parse(trimmed)
+    if (Array.isArray(parsed)) return parsed.length === 0
+    if (parsed && typeof parsed === 'object') return Object.keys(parsed).length === 0
+    return false
+  } catch {
+    return false
+  }
+}
+
+/**
  * Jalankan migrasi SATU KALI. Aman dipanggil berkali-kali (idempotent) --
- * kalau kunci baru sudah pernah terisi, tidak akan ditimpa lagi.
+ * kalau kunci baru sudah pernah terisi data SUNGGUHAN (bukan cuma array/objek
+ * kosong), tidak akan ditimpa lagi.
  */
 export function jalankanMigrasiArsipTahun(): HasilMigrasiTahun {
   const hasil: HasilMigrasiTahun = { disalin: [], dilewati: [], tidakAdaData: [] }
 
   for (const kunciDasar of DAFTAR_KUNCI_TERDAMPAK_ARSIP_TAHUN) {
     const dataLama = localStorage.getItem(kunciDasar)
-    if (!dataLama) {
+    if (nilaiBenarBenarKosong(dataLama)) {
       hasil.tidakAdaData.push(kunciDasar)
       continue
     }
     const kunciBaru = kunciTahun(kunciDasar)
-    const sudahAdaBaru = localStorage.getItem(kunciBaru)
-    if (sudahAdaBaru) {
-      hasil.dilewati.push(kunciDasar)
+    const dataBaru = localStorage.getItem(kunciBaru)
+    if (!nilaiBenarBenarKosong(dataBaru)) {
+      hasil.dilewati.push({ kunci: kunciDasar, jumlahLama: jumlahItem(dataLama), jumlahBaru: jumlahItem(dataBaru) })
       continue
     }
-    localStorage.setItem(kunciBaru, dataLama)
+    localStorage.setItem(kunciBaru, dataLama as string)
     hasil.disalin.push(kunciDasar)
   }
 
   return hasil
 }
 
+/**
+ * TIMPA PAKSA satu kunci tertentu -- dipakai kalau pengguna sudah membandingkan
+ * jumlah item lama vs baru dan yakin data baru (yang lebih sedikit/kosong-ish)
+ * boleh ditimpa oleh data lama yang lebih lengkap. TIDAK bisa dibatalkan.
+ */
+export function timpaPaksaSatuKunci(kunciDasar: string): boolean {
+  const dataLama = localStorage.getItem(kunciDasar)
+  if (nilaiBenarBenarKosong(dataLama)) return false
+  localStorage.setItem(kunciTahun(kunciDasar), dataLama as string)
+  return true
+}
+
 /** Cek cepat: apakah ada indikasi data lama yang belum bermigrasi? (untuk tampilkan peringatan) */
 export function adaDataLamaBelumBermigrasi(): boolean {
   for (const kunciDasar of DAFTAR_KUNCI_TERDAMPAK_ARSIP_TAHUN) {
     const dataLama = localStorage.getItem(kunciDasar)
-    if (dataLama && !localStorage.getItem(kunciTahun(kunciDasar))) return true
+    if (!nilaiBenarBenarKosong(dataLama) && nilaiBenarBenarKosong(localStorage.getItem(kunciTahun(kunciDasar)))) return true
   }
   return false
 }
