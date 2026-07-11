@@ -688,8 +688,8 @@ async function eksporProtaPDF(params: {
     startY: curY,
     head: [['Semester', 'Elemen', 'Materi', 'Tujuan Pembelajaran', 'Alokasi Waktu (JP)']],
     body,
-    headStyles: { font: 'times', fillColor: [237, 227, 243], textColor: [30, 10, 40], fontStyle: 'bold', fontSize: 11, halign: 'center', cellPadding: 3, lineColor: [0, 0, 0], lineWidth: 0.15 },
-    bodyStyles: { font: 'times', fontSize: 10.5, valign: 'middle', overflow: 'linebreak', cellPadding: 2.8, lineColor: [0, 0, 0], lineWidth: 0.15 },
+    headStyles: { font: 'times', fillColor: [237, 227, 243], textColor: [30, 10, 40], fontStyle: 'bold', fontSize: 14, halign: 'center', cellPadding: 3.5, lineColor: [0, 0, 0], lineWidth: 0.15 },
+    bodyStyles: { font: 'times', fontSize: 12, valign: 'middle', overflow: 'linebreak', cellPadding: 3.2, lineColor: [0, 0, 0], lineWidth: 0.15 },
     columnStyles: {
       0: { cellWidth: wSemester, textColor: [106, 25, 125] as unknown as string },
       1: { cellWidth: wElemen },
@@ -909,8 +909,8 @@ async function eksporPromesPDF(params: {
     startY: curY,
     head: [headRow1, headRow2],
     body,
-    headStyles: { font: 'times', fillColor: [237, 227, 243], textColor: [30, 10, 40], fontStyle: 'bold', fontSize: 9, halign: 'center', valign: 'middle', cellPadding: 2.3, lineColor: [0, 0, 0], lineWidth: 0.1 },
-    bodyStyles: { font: 'times', fontSize: 9, valign: 'middle', overflow: 'linebreak', cellPadding: 2.1, lineColor: [0, 0, 0], lineWidth: 0.1 },
+    headStyles: { font: 'times', fillColor: [237, 227, 243], textColor: [30, 10, 40], fontStyle: 'bold', fontSize: 11, halign: 'center', valign: 'middle', cellPadding: 2.8, lineColor: [0, 0, 0], lineWidth: 0.1 },
+    bodyStyles: { font: 'times', fontSize: 11, valign: 'middle', overflow: 'linebreak', cellPadding: 2.6, lineColor: [0, 0, 0], lineWidth: 0.1 },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     columnStyles: lebarKolom.reduce((acc: any, col, idx) => { acc[idx] = col; return acc }, {}),
     tableWidth: contentWidth,

@@ -37,6 +37,17 @@ interface JadwalTetap {
   lembagaIds: string[]
   rombelIds: string[]
   warna: string
+  // BARU: Jadwal Tetap sekarang juga menggantikan fungsi "Kelas Gabungan" --
+  // kalau jenis === 'mapel', ini sebenarnya adalah MATA PELAJARAN (bukan
+  // sekadar nama kegiatan bebas) yang diajar oleh SATU guru untuk BEBERAPA
+  // kelas SEKALIGUS (isi di rombelIds), dan otomatis ikut terhitung sebagai
+  // jam mengajar guru tsb -- persis seperti jadwal mapel biasa, tapi dengan
+  // "satu sumber data berlaku untuk banyak kelas" seperti jadwal kegiatan.
+  // Kalau jenis kosong/'kegiatan' (data lama), berperilaku seperti sebelumnya.
+  jenis?: 'kegiatan' | 'mapel'
+  mapelId?: string
+  guruId?: string
+  kelompokId?: string // menghubungkan beberapa baris (slot berturutan) sebagai SATU sesi multi-JP
 }
 
 interface JadwalGiliran {
@@ -96,8 +107,12 @@ interface PasanganPenandatangan {
 // ============================================================
 // KONSTANTA
 // ============================================================
-const LIST_HARI = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
-const LIST_HARI_UNIT = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'] // jadwal unit hanya s.d Jumat
+// Jadwal pelajaran HANYA Senin s.d Jumat -- Sabtu sengaja TIDAK dipakai lagi
+// untuk jadwal pelajaran (generate, input manual, semua form terkait jadwal
+// mengikuti daftar ini). LIST_HARI_UNIT dipertahankan sebagai alias yang
+// sama persis, supaya kode lama yang masih memakainya tetap konsisten.
+const LIST_HARI = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat']
+const LIST_HARI_UNIT = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat']
 
 // ============================================================
 // HELPER: PARSE FORMAT KETERSEDIAAN JAM "1-2,9-10"
@@ -167,15 +182,49 @@ function generateKodeMapel(namaAsli: string): string {
 // ============================================================
 function urutkanRombelKelas<T extends { nama?: string }>(list: T[]): T[] {
   return [...list].sort((a, b) => {
-    const ma = (a.nama || '').match(/^(\d+)\s*([A-Za-z]*)/)
-    const mb = (b.nama || '').match(/^(\d+)\s*([A-Za-z]*)/)
+    const ma = (a.nama || '').match(/^(\d+)\s*[-–_]?\s*([A-Za-z]*\d*)/)
+    const mb = (b.nama || '').match(/^(\d+)\s*[-–_]?\s*([A-Za-z]*\d*)/)
     const numA = ma ? parseInt(ma[1], 10) : Number.MAX_SAFE_INTEGER
     const numB = mb ? parseInt(mb[1], 10) : Number.MAX_SAFE_INTEGER
     if (numA !== numB) return numA - numB
     const subA = ma ? ma[2] : (a.nama || '')
     const subB = mb ? mb[2] : (b.nama || '')
+    // Kalau sisa setelah angka depan SAMA-SAMA angka (mis. "5-1" vs "5-2" ->
+    // sisa "1" vs "2"), urutkan SECARA NUMERIK -- bukan alfabet -- supaya
+    // "5-2", "5-10" tidak terbalik jadi "5-10" sebelum "5-2".
+    const subNumA = /^\d+$/.test(subA) ? parseInt(subA, 10) : null
+    const subNumB = /^\d+$/.test(subB) ? parseInt(subB, 10) : null
+    if (subNumA !== null && subNumB !== null) return subNumA - subNumB
     return subA.localeCompare(subB, 'id')
   })
+}
+
+/** Jaring pengaman TAMBAHAN: paksa kelas-kelas yang tergabung dalam satu grup
+ *  KELAS GABUNGAN untuk selalu bersebelahan (adjacent) di urutan kolom tabel,
+ *  APAPUN nama kelasnya -- supaya penggabungan sel (colspan) di tabel jadwal
+ *  SELALU bisa terjadi. HTML cuma bisa menggabungkan kolom yang bersebelahan;
+ *  kalau dua kelas gabungan kebetulan tidak berurutan secara alami (mis. beda
+ *  jenjang/format nama), penggabungan sel tidak akan pernah terjadi tanpa ini. */
+function dorongKelasGabunganBersebelahan<T extends { id: string }>(list: T[], daftarKelasGabungan: any[]): T[] {
+  if (!daftarKelasGabungan.length) return list
+  let hasil = [...list]
+  daftarKelasGabungan.forEach(kg => {
+    if (!kg.rombelIds || kg.rombelIds.length < 2) return
+    const idxAnggota = kg.rombelIds
+      .map((rid: string) => hasil.findIndex(x => x.id === rid))
+      .filter((idx: number) => idx !== -1)
+      .sort((a: number, b: number) => a - b)
+    if (idxAnggota.length < 2) return
+    // Ambil semua anggota grup ini (dalam urutan posisi SEKARANG), keluarkan
+    // dari daftar, lalu sisipkan kembali berurutan tepat di posisi anggota
+    // pertama -- hasilnya semua anggota grup ini pasti bersebelahan.
+    const idAnggotaUrut = idxAnggota.map((idx: number) => hasil[idx].id)
+    const posSisip = idxAnggota[0]
+    hasil = hasil.filter(x => !idAnggotaUrut.includes(x.id))
+    const anggotaObj = idAnggotaUrut.map((id: string) => list.find(x => x.id === id)!)
+    hasil.splice(posSisip, 0, ...anggotaObj)
+  })
+  return hasil
 }
 
 // ============================================================
@@ -249,12 +298,36 @@ function generatePrintHtml(p: {
     })
   }
 
+  // Mirip cara kerja Jadwal Berlaku Umum (Jadwal Tetap): kalau kelas ini
+  // bagian dari grup KELAS GABUNGAN, jadwal yang "berlaku" utk kelas ini
+  // dicari dari SEMBARANG anggota grup yang sudah punya data -- BUKAN wajib
+  // dari data milik kelas ini sendiri. Jadi walau yang benar-benar tersimpan
+  // di database cuma 1 baris (mis. utk kelas 5-2 saja), kelas 5-1 (anggota
+  // grup yang sama) akan tetap dianggap "punya" jadwal itu juga.
+  const cariJadwalGabunganLintasKelas = (hari: string, slotId: string, rombelId: string) => {
+    const grup = daftarKelasGabungan.filter(kg => kg.rombelIds?.includes(rombelId) && kg.rombelIds?.length > 1)
+    for (const kg of grup) {
+      const jGab = daftarJadwal.find(jj => jj.hari === hari && jj.waktuId === slotId && jj.mapelId === kg.mapelId && kg.rombelIds.includes(jj.rombelId))
+      if (jGab) return jGab
+    }
+    return null
+  }
+
   const getCell = (hari: string, slotId: string, rombelId: string) => {
     const tetap = getTetap(hari, slotId, rombelId)
-    if (tetap) return { label: tetap.nama, sub: '', tipe: 'tetap' as const, tetapId: tetap.id as string | null }
+    if (tetap) {
+      if (tetap.jenis === 'mapel') {
+        const mapelTetap = daftarMapel.find((m: any) => m.id === tetap.mapelId)
+        const guruTetap = daftarGuru.find((g: any) => g.id === tetap.guruId)
+        // Dianggap tipe 'gabungan' (bukan 'tetap') supaya diberi kode mapel &
+        // warna gabungan seperti mata pelajaran biasa, bukan warna kegiatan.
+        return { label: mapelTetap?.nama || tetap.nama, sub: guruTetap?.nama || '', tipe: 'gabungan' as const, tetapId: tetap.id as string | null }
+      }
+      return { label: tetap.nama, sub: '', tipe: 'tetap' as const, tetapId: tetap.id as string | null }
+    }
 
     const giliran = daftarJadwalGiliran.find(jg => jg.rombelId === rombelId && jg.waktuId === slotId && jg.hari === hari)
-    const j = daftarJadwal.find(jj => jj.hari === hari && jj.waktuId === slotId && jj.rombelId === rombelId)
+    const j = daftarJadwal.find(jj => jj.hari === hari && jj.waktuId === slotId && jj.rombelId === rombelId) || cariJadwalGabunganLintasKelas(hari, slotId, rombelId)
 
     if (giliran && !j) {
       const labelGab = giliran.mapelGuruList.map(mg => daftarMapel.find((m: any) => m.id === mg.mapelId)?.nama || '').filter(Boolean).join('/')
@@ -290,25 +363,43 @@ function generatePrintHtml(p: {
     }
     const tdWaktu = `<td style="padding:3px 4px;font-size:7.5px;font-weight:700;background:#f1f5f9;border:1px solid #000;word-break:break-word;text-align:center">${slot.mulai} - ${slot.selesai}</td>`
     const tdCells = hariList.map(hari => {
-      // Ambil cell untuk seluruh rombel pada hari ini dulu, supaya bisa dideteksi
-      // apakah semuanya berasal dari SATU jadwal tetap yang sama (mis. Upacara untuk
-      // semua kelas). Jika ya, gabungkan (merge) jadi satu sel saja agar tulisannya
-      // tidak diulang-ulang per kelas -- mirip perlakuan baris ISTIRAHAT.
+      // Ambil cell untuk seluruh rombel pada hari ini dulu, supaya bisa dikelompokkan:
+      // kolom-kolom kelas yang BERURUTAN dan punya jadwal TETAP yang sama (mis. Upacara
+      // utk semua kelas) ATAU kelas GABUNGAN yang sama (mapel+guru sama) digabung jadi
+      // satu sel (colspan), supaya tulisannya tidak diulang-ulang per kelas.
       const cellsHariIni = rombelFiltered.map((r: any) => getCell(hari, slot.id, r.id))
-      const semuaTetapSama =
-        cellsHariIni.length > 0 &&
-        cellsHariIni.every(c => c && c.tipe === 'tetap' && c.tetapId === cellsHariIni[0]!.tetapId)
 
-      if (semuaTetapSama) {
-        const cell = cellsHariIni[0]!
-        return `<td colspan="${rombelFiltered.length}" style="padding:3px 4px;border:1px solid #000;text-align:center;background:#dbeafe;vertical-align:middle">
-          <span style="font-size:8px;font-weight:700;display:block;line-height:1.25;white-space:normal;word-break:break-word">${cell.label}</span>
-        </td>`
+      type Grup = { cell: any; jumlahKolom: number }
+      const grupList: Grup[] = []
+      let i = 0
+      while (i < cellsHariIni.length) {
+        const c = cellsHariIni[i]
+        if (c && (c.tipe === 'tetap' || c.tipe === 'gabungan')) {
+          let j = i + 1
+          while (
+            j < cellsHariIni.length &&
+            cellsHariIni[j] &&
+            cellsHariIni[j]!.tipe === c.tipe &&
+            (c.tipe === 'tetap' ? cellsHariIni[j]!.tetapId === c.tetapId : (cellsHariIni[j]!.label === c.label && cellsHariIni[j]!.sub === c.sub))
+          ) j++
+          grupList.push({ cell: c, jumlahKolom: j - i })
+          i = j
+        } else {
+          grupList.push({ cell: c, jumlahKolom: 1 })
+          i++
+        }
       }
 
-      return rombelFiltered.map((r: any, idx: number) => {
-        const cell = cellsHariIni[idx]
-        if (!cell) return `<td style="padding:3px 2px;border:1px solid #000;text-align:center;font-size:7px;color:#cbd5e1">-</td>`
+      return grupList.map((g, gi) => {
+        const cell = g.cell
+        if (!cell) return `<td key="${gi}" style="padding:3px 2px;border:1px solid #000;text-align:center;font-size:7px;color:#cbd5e1">-</td>`
+
+        if (cell.tipe === 'tetap' && g.jumlahKolom > 1) {
+          return `<td colspan="${g.jumlahKolom}" style="padding:3px 4px;border:1px solid #000;text-align:center;background:#dbeafe;vertical-align:middle">
+            <span style="font-size:8px;font-weight:700;display:block;line-height:1.25;white-space:normal;word-break:break-word">${cell.label}</span>
+          </td>`
+        }
+
         let bg = '#fff'
         if (cell.tipe === 'tetap') bg = '#dbeafe'
         if (cell.tipe === 'gabungan') bg = '#d1fae5'
@@ -327,7 +418,7 @@ function generatePrintHtml(p: {
         // membengkak dan hasil cetak tetap muat rapi dalam satu halaman A4 landscape.
         // Jika nama mapel panjang, biarkan turun ke baris baru (word-wrap) -- JANGAN
         // dipaksakan tampil memanjang ke samping yang bisa merusak tata letak kolom.
-        return `<td style="padding:3px 2px;border:1px solid #000;text-align:center;background:${bg};vertical-align:middle">
+        return `<td${g.jumlahKolom > 1 ? ` colspan="${g.jumlahKolom}"` : ''} style="padding:3px 2px;border:1px solid #000;text-align:center;background:${bg};vertical-align:middle">
           <span style="font-size:7.5px;font-weight:700;display:block;line-height:1.2;white-space:normal;word-break:break-word">${labelTampil}</span>
         </td>`
       }).join('')
@@ -711,10 +802,35 @@ export default function JadwalPelajaranPage() {
       setTabView('rekap_jadwal')
     }
   }, [bolehEdit, tabView])
-  const [subTabKelas, setSubTabKelas] = useState<'identitas' | 'gabungan' | 'giliran' | 'tetap' | 'larangan' | 'titimangsa'>('identitas')
+  const [subTabKelas, setSubTabKelas] = useState<'identitas' | 'giliran' | 'tetap' | 'larangan' | 'titimangsa'>('identitas')
   const [hariPlotTabel, setHariPlotTabel] = useState('Senin')
   const [editingCell, setEditingCell] = useState<string | null>(null)
   const [editGuruMapel, setEditGuruMapel] = useState<string>('')
+  const [cariGuruMapel, setCariGuruMapel] = useState<string>('')
+
+  // Dukungan keyboard ala Excel: tekan Delete/Backspace untuk mengosongkan
+  // sel jadwal yang sedang terbuka (tanpa perlu klik "X" lalu "Simpan" lagi).
+  // Diabaikan kalau fokus sedang di dalam kolom teks (mis. sedang mengetik
+  // pencarian nama guru), supaya tidak mengganggu pengetikan huruf biasa.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!editingCell) return
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      const target = e.target as HTMLElement
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      e.preventDefault()
+      const [hari, waktuId, rombelId] = editingCell.split('_')
+      const existing = daftarJadwal.find(j => j.hari === hari && j.waktuId === waktuId && j.rombelId === rombelId)
+      if (existing) {
+        const f = daftarJadwal.filter(j => j.id !== existing.id)
+        setDaftarJadwal(f)
+        save('data_jadwal_pelajaran', f)
+      }
+      setEditingCell(null); setEditGuruMapel(''); setEditJumlahJp(null); setCariGuruMapel('')
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [editingCell, daftarJadwal])
   const [editJumlahJp, setEditJumlahJp] = useState<number | null>(null)
   const [modeTampil, setModeTampil] = useState<'keseluruhan' | 'unit'>('keseluruhan')
   const [unitFilter, setUnitFilter] = useState<string>('lembaga-induk')
@@ -745,7 +861,11 @@ export default function JadwalPelajaranPage() {
 
   // Form: Jadwal Tetap
   const [editTetapId, setEditTetapId] = useState<string | null>(null)
+  const [formTetapJenis, setFormTetapJenis] = useState<'kegiatan' | 'mapel'>('kegiatan')
   const [formTetapNama, setFormTetapNama] = useState('')
+  const [formTetapMapelId, setFormTetapMapelId] = useState('')
+  const [formTetapGuruId, setFormTetapGuruId] = useState('')
+  const [formTetapJumlahJp, setFormTetapJumlahJp] = useState<number | null>(null)
   const [formTetapHari, setFormTetapHari] = useState('Senin')
   const [formTetapWaktuId, setFormTetapWaktuId] = useState('')
   const [formTetapBerlaku, setFormTetapBerlaku] = useState<'semua' | 'lembaga' | 'rombel'>('semua')
@@ -760,6 +880,7 @@ export default function JadwalPelajaranPage() {
 
   // Form: Piket Guru (per LEMBAGA UNIT -> per hari -> multi guru)
   const [piketFormLembagaId, setPiketFormLembagaId] = useState<string>('')
+  const [piketSearchQuery, setPiketSearchQuery] = useState<Record<string, string>>({})
   const [piketDraft, setPiketDraft] = useState<{ [lembagaId: string]: { [hari: string]: string[] } }>({})
 
   // Download modal
@@ -806,6 +927,45 @@ export default function JadwalPelajaranPage() {
       load('master_peran', setDaftarPeran)
 
       load('data_jadwal_pelajaran', setDaftarJadwal)
+
+      // Bersihkan sisa data jadwal hari SABTU yang mungkin sudah terlanjur
+      // tersimpan dari sebelum Sabtu dihapus dari daftar hari pelajaran --
+      // supaya benar-benar tidak ada jadwal guru di hari Sabtu sama sekali,
+      // bukan cuma tidak ditampilkan/tidak bisa diisi baru.
+      try {
+        const jadwalMentah = localStorage.getItem(kunciTahun('data_jadwal_pelajaran'))
+        if (jadwalMentah) {
+          const jadwalArr = JSON.parse(jadwalMentah)
+          const adaSabtu = jadwalArr.some((j: any) => j.hari === 'Sabtu')
+          if (adaSabtu) {
+            const bersih = jadwalArr.filter((j: any) => j.hari !== 'Sabtu')
+            setDaftarJadwal(bersih)
+            save('data_jadwal_pelajaran', bersih)
+          }
+        }
+        const tetapMentah = localStorage.getItem('master_jadwal_tetap')
+        if (tetapMentah) {
+          const tetapArr = JSON.parse(tetapMentah)
+          const adaSabtuTetap = tetapArr.some((j: any) => j.hari === 'Sabtu')
+          if (adaSabtuTetap) {
+            const bersihTetap = tetapArr.filter((j: any) => j.hari !== 'Sabtu')
+            setDaftarJadwalTetap(bersihTetap)
+            save('master_jadwal_tetap', bersihTetap)
+          }
+        }
+        const giliranMentah = localStorage.getItem('master_jadwal_giliran')
+        if (giliranMentah) {
+          const giliranArr = JSON.parse(giliranMentah)
+          const adaSabtuGiliran = giliranArr.some((j: any) => j.hari === 'Sabtu')
+          if (adaSabtuGiliran) {
+            const bersihGiliran = giliranArr.filter((j: any) => j.hari !== 'Sabtu')
+            setDaftarJadwalGiliran(bersihGiliran)
+            save('master_jadwal_giliran', bersihGiliran)
+          }
+        }
+      } catch (e) {
+        console.warn('Pembersihan sisa jadwal Sabtu gagal:', e)
+      }
       load('master_pemetaan_waktu', setDaftarWaktu)
       load('master_kelas_gabungan', setDaftarKelasGabungan)
       load('master_jadwal_tetap', setDaftarJadwalTetap)
@@ -814,6 +974,47 @@ export default function JadwalPelajaranPage() {
       load('master_piket_guru', setDaftarPiket)
       load('matriks_alokasi_rinci_samping', setMatriksRinciJp, {})
       load('request_hari_jp_guru', setRequestHariJp, {})
+
+      // Migrasi otomatis (sekali jalan, aman diulang): untuk data yang sudah
+      // terlanjur ada SEBELUM auto-isi kelas gabungan ini dibuat -- kalau ada
+      // grup Kelas Gabungan yang SEBAGIAN kelasnya sudah diisi JP di Matriks
+      // Alokasi tapi kelas lain dalam grup yang sama masih kosong, samakan
+      // otomatis (pakai nilai dari kelas yang sudah terisi). Ini yang
+      // menyebabkan sebagian kelas gabungan tidak pernah ikut ter-generate
+      // sebelumnya -- bukan bug generate, tapi input JP yang kosong itu.
+      try {
+        const rinciMentah = localStorage.getItem(kunciTahun('matriks_alokasi_rinci_samping'))
+        const gabunganMentah = localStorage.getItem('master_kelas_gabungan')
+        if (rinciMentah && gabunganMentah) {
+          const rinci = JSON.parse(rinciMentah)
+          const gabungan = JSON.parse(gabunganMentah)
+          let adaPerubahan = false
+          const rinciBaru = { ...rinci }
+          gabungan.forEach((kg: any) => {
+            if (!kg.rombelIds || kg.rombelIds.length < 2) return
+            // Cari semua kombinasi guru yang relevan dari key yang sudah ada (format guruId_mapelId_rombelId)
+            const guruIdSet = new Set<string>()
+            Object.keys(rinci).forEach(k => {
+              const parts = k.split('_')
+              if (parts.length === 3 && parts[1] === kg.mapelId && kg.rombelIds.includes(parts[2])) guruIdSet.add(parts[0])
+            })
+            guruIdSet.forEach(guruId => {
+              const nilaiTerisi = kg.rombelIds.map((rid: string) => rinci[`${guruId}_${kg.mapelId}_${rid}`]).find((v: string) => v && v.trim())
+              if (!nilaiTerisi) return
+              kg.rombelIds.forEach((rid: string) => {
+                const key = `${guruId}_${kg.mapelId}_${rid}`
+                if (!rinciBaru[key] || !rinciBaru[key].trim()) { rinciBaru[key] = nilaiTerisi; adaPerubahan = true }
+              })
+            })
+          })
+          if (adaPerubahan) {
+            setMatriksRinciJp(rinciBaru)
+            save('matriks_alokasi_rinci_samping', rinciBaru)
+          }
+        }
+      } catch (e) {
+        console.warn('Migrasi auto-isi kelas gabungan gagal:', e)
+      }
 
       const storedSemester = localStorage.getItem(kunciTahun('jadwal_semester_aktif'))
       if (storedSemester) setSemesterAktif(storedSemester)
@@ -1062,22 +1263,69 @@ export default function JadwalPelajaranPage() {
   // CRUD: JADWAL TETAP (dengan EDIT)
   // ============================================================
   const resetFormTetap = () => {
-    setEditTetapId(null); setFormTetapNama(''); setFormTetapHari('Senin'); setFormTetapWaktuId('')
+    setEditTetapId(null); setFormTetapJenis('kegiatan'); setFormTetapNama(''); setFormTetapMapelId(''); setFormTetapGuruId(''); setFormTetapJumlahJp(null)
+    setFormTetapHari('Senin'); setFormTetapWaktuId('')
     setFormTetapBerlaku('semua'); setFormTetapLembagaIds([]); setFormTetapRombelIds([]); setFormTetapWarna(WARNA_OPTIONS[0].value)
+  }
+
+  // Ambil pilihan JP (segmen sesi) dari Matriks Alokasi JP untuk kombinasi
+  // guru+mapel+kelas ini -- mis. kalau di Matriks tertulis "3, 2", hasilnya
+  // [3, 2] -- admin memilih salah satu sebagai panjang sesi utk entri ini.
+  const opsiJpTetapDariMatriks = (): number[] => {
+    if (!formTetapGuruId || !formTetapMapelId) return []
+    const rombelAcuan = formTetapBerlaku === 'rombel' ? formTetapRombelIds[0] : daftarRombel[0]?.id
+    if (!rombelAcuan) return []
+    const str = matriksRinciJp[`${formTetapGuruId}_${formTetapMapelId}_${rombelAcuan}`] || ''
+    return str.split(',').map(x => Number(x.trim())).filter(n => n > 0)
   }
 
   const handleSimpanTetap = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!formTetapNama || !formTetapWaktuId) { alert('Isi nama kegiatan dan pilih slot waktu.'); return }
+    if (formTetapJenis === 'mapel') {
+      if (!formTetapMapelId || !formTetapGuruId || !formTetapWaktuId) { alert('Pilih mata pelajaran, pendidik, dan slot waktu.'); return }
+      if (formTetapBerlaku === 'rombel' && formTetapRombelIds.length < 2) { alert('Untuk jenis Mata Pelajaran, pilih minimal 2 kelas (kalau cuma 1 kelas, cukup diisi lewat Plot Jadwal biasa).'); return }
+      const opsiJp = opsiJpTetapDariMatriks()
+      if (opsiJp.length > 1 && !formTetapJumlahJp) { alert('Pilih berapa JP untuk sesi ini (sesuai Matriks Alokasi JP).'); return }
+    } else {
+      if (!formTetapNama || !formTetapWaktuId) { alert('Isi nama kegiatan dan pilih slot waktu.'); return }
+    }
+    const namaAkhir = formTetapJenis === 'mapel' ? (daftarMapel.find((m: any) => m.id === formTetapMapelId)?.nama || '') : formTetapNama
+
+    // Untuk jenis Mata Pelajaran: tentukan berapa slot BERTURUTAN yang perlu
+    // diisi, sesuai Matriks Alokasi JP (mis. "3" -> 3 slot berturutan sekali
+    // jalan, otomatis, tidak perlu diklik-isi satu-satu).
+    const opsiJp = formTetapJenis === 'mapel' ? opsiJpTetapDariMatriks() : []
+    const jumlahJp = formTetapJenis === 'mapel' ? (formTetapJumlahJp || opsiJp[0] || 1) : 1
 
     if (editTetapId) {
+      // Edit: hanya ubah baris yang sedang diedit (tidak mengubah jumlah slot -- kalau mau ubah JP, hapus & buat ulang).
       const updated = daftarJadwalTetap.map(jt => jt.id === editTetapId ? {
-        ...jt, nama: formTetapNama, hari: formTetapHari, waktuId: formTetapWaktuId,
+        ...jt, jenis: formTetapJenis, nama: namaAkhir, mapelId: formTetapJenis === 'mapel' ? formTetapMapelId : undefined, guruId: formTetapJenis === 'mapel' ? formTetapGuruId : undefined,
+        hari: formTetapHari, waktuId: formTetapWaktuId,
         berlakuUntuk: formTetapBerlaku, lembagaIds: formTetapLembagaIds, rombelIds: formTetapRombelIds, warna: formTetapWarna
       } : jt)
       setDaftarJadwalTetap(updated); save('master_jadwal_tetap', updated)
+    } else if (formTetapJenis === 'mapel' && jumlahJp > 1) {
+      // Isi OTOMATIS beberapa slot berturutan mulai dari slot yang dipilih.
+      const slotUrutMapel = daftarWaktu.filter(w => w.jenis === 'mapel').sort((a, b) => Number(a.jamKe) - Number(b.jamKe))
+      const idxMulai = slotUrutMapel.findIndex(s => s.id === formTetapWaktuId)
+      if (idxMulai < 0) { alert('Slot waktu tidak valid.'); return }
+      const slotTarget = slotUrutMapel.slice(idxMulai, idxMulai + jumlahJp)
+      if (slotTarget.length < jumlahJp) { alert(`⚠️ Slot tidak cukup untuk menampung ${jumlahJp} JP berturutan mulai dari sini. Pilih slot yang lebih awal.`); return }
+      const kelompokId = 'tetapgrp-' + Date.now()
+      const barisBaru: JadwalTetap[] = slotTarget.map(s => ({
+        id: 'tetap-' + Date.now() + '-' + s.id, jenis: 'mapel', nama: namaAkhir, mapelId: formTetapMapelId, guruId: formTetapGuruId,
+        hari: formTetapHari, waktuId: s.id, berlakuUntuk: formTetapBerlaku, lembagaIds: formTetapLembagaIds, rombelIds: formTetapRombelIds, warna: formTetapWarna,
+        kelompokId,
+      }))
+      const updated = [...daftarJadwalTetap, ...barisBaru]
+      setDaftarJadwalTetap(updated); save('master_jadwal_tetap', updated)
     } else {
-      const jt: JadwalTetap = { id: 'tetap-' + Date.now(), nama: formTetapNama, hari: formTetapHari, waktuId: formTetapWaktuId, berlakuUntuk: formTetapBerlaku, lembagaIds: formTetapLembagaIds, rombelIds: formTetapRombelIds, warna: formTetapWarna }
+      const jt: JadwalTetap = {
+        id: 'tetap-' + Date.now(), jenis: formTetapJenis, nama: namaAkhir,
+        mapelId: formTetapJenis === 'mapel' ? formTetapMapelId : undefined, guruId: formTetapJenis === 'mapel' ? formTetapGuruId : undefined,
+        hari: formTetapHari, waktuId: formTetapWaktuId, berlakuUntuk: formTetapBerlaku, lembagaIds: formTetapLembagaIds, rombelIds: formTetapRombelIds, warna: formTetapWarna
+      }
       const updated = [...daftarJadwalTetap, jt]
       setDaftarJadwalTetap(updated); save('master_jadwal_tetap', updated)
     }
@@ -1085,13 +1333,21 @@ export default function JadwalPelajaranPage() {
   }
 
   const handleEditTetap = (jt: JadwalTetap) => {
-    setEditTetapId(jt.id); setFormTetapNama(jt.nama); setFormTetapHari(jt.hari); setFormTetapWaktuId(jt.waktuId)
+    setEditTetapId(jt.id); setFormTetapJenis(jt.jenis || 'kegiatan'); setFormTetapNama(jt.nama)
+    setFormTetapMapelId(jt.mapelId || ''); setFormTetapGuruId(jt.guruId || '')
+    setFormTetapHari(jt.hari); setFormTetapWaktuId(jt.waktuId)
     setFormTetapBerlaku(jt.berlakuUntuk); setFormTetapLembagaIds(jt.lembagaIds || []); setFormTetapRombelIds(jt.rombelIds || []); setFormTetapWarna(jt.warna)
   }
 
   const handleHapusTetap = (id: string) => {
-    if (!confirm('Hapus jadwal tetap ini?')) return
-    const filtered = daftarJadwalTetap.filter(jt => jt.id !== id)
+    const target = daftarJadwalTetap.find(jt => jt.id === id)
+    const pesanKonfirmasi = target?.kelompokId
+      ? 'Jadwal ini adalah bagian dari sesi multi-JP berturutan. Hapus SEMUA slot dalam sesi ini sekaligus?'
+      : 'Hapus jadwal tetap ini?'
+    if (!confirm(pesanKonfirmasi)) return
+    const filtered = target?.kelompokId
+      ? daftarJadwalTetap.filter(jt => jt.kelompokId !== target.kelompokId)
+      : daftarJadwalTetap.filter(jt => jt.id !== id)
     setDaftarJadwalTetap(filtered); save('master_jadwal_tetap', filtered)
     if (editTetapId === id) resetFormTetap()
   }
@@ -1305,6 +1561,18 @@ export default function JadwalPelajaranPage() {
     const sw = daftarWaktu.find(w => w.id === waktuId)
     if (!sw || sw.jenis !== 'mapel') return { ok: true }
     const namaG = daftarGuru.find(g => g.id === guruId)?.nama || 'Pendidik'
+
+    // Kombinasi guru+mapel+kelas ini sudah diatur lewat Jadwal Berlaku Umum
+    // (jenis Mata Pelajaran) -- TIDAK BOLEH diisi manual lagi di sini, supaya
+    // tidak dobel. Kalau mau ubah, edit lewat Jadwal Berlaku Umum.
+    const sudahDiBerlakuUmum = daftarJadwalTetap.some(jt =>
+      jt.jenis === 'mapel' && jt.guruId === guruId && jt.mapelId === mapelId &&
+      (jt.berlakuUntuk === 'semua' || (jt.berlakuUntuk === 'rombel' && jt.rombelIds?.includes(rombelId)) || (jt.berlakuUntuk === 'lembaga' && getRombelLembagaId(rombelId) && jt.lembagaIds?.includes(getRombelLembagaId(rombelId)!)))
+    )
+    if (sudahDiBerlakuUmum) {
+      const namaM = daftarMapel.find((m: any) => m.id === mapelId)?.nama || mapelId
+      return { ok: false, pesan: `${namaM} untuk ${namaG} di kelas ini SUDAH diatur lewat Jadwal Berlaku Umum. Tidak bisa diisi manual lagi di sini (supaya tidak dobel) -- kalau mau ubah, edit lewat menu Jadwal Berlaku Umum.` }
+    }
 
     const bentrokGuru = daftarJadwal.find(j => {
       if (j.id === kecuali) return false
@@ -1547,8 +1815,18 @@ export default function JadwalPelajaranPage() {
     // ── Susun tugas ───────────────────────────────────────────────────────────
     interface T { guru: any; mapel: any; rId: string; panjang: number; sesiIdx: number; hD: Set<string>; ks: Record<string,string> }
     const semuaTugas: T[] = []
+    // Kombinasi guru+mapel+kelas yang SUDAH diatur lewat Jadwal Berlaku Umum
+    // (jenis Mata Pelajaran) TIDAK BOLEH ikut digenerate lagi di sini --
+    // kalau tetap digenerate, jadwalnya jadi DOBEL (satu dari Jadwal Berlaku
+    // Umum, satu lagi hasil generate biasa).
+    const sudahDiaturBerlakuUmum = (guruId: string, mapelId: string, rombelId: string): boolean =>
+      daftarJadwalTetap.some(jt =>
+        jt.jenis === 'mapel' && jt.guruId === guruId && jt.mapelId === mapelId &&
+        (jt.berlakuUntuk === 'semua' || (jt.berlakuUntuk === 'rombel' && jt.rombelIds?.includes(rombelId)) || (jt.berlakuUntuk === 'lembaga' && getRombelLembagaId(rombelId) && jt.lembagaIds?.includes(getRombelLembagaId(rombelId)!)))
+      )
     matriksRows.forEach(({ guru, mapel, rombelRelevant }) => {
       rombelRelevant.filter((r: string) => rombelTargetSet.has(r)).forEach((rId: string) => {
+        if (sudahDiaturBerlakuUmum(guru.id, mapel.id, rId)) return
         const str = matriksRinciJp[`${guru.id}_${mapel.id}_${rId}`] || ''
         if (!str) return
         const sesi = str.split(',').map(x => Number(x.trim())).filter(n => n > 0)
@@ -1557,11 +1835,29 @@ export default function JadwalPelajaranPage() {
         sesi.forEach((panjang, sesiIdx) => semuaTugas.push({ guru, mapel, rId, panjang, sesiIdx, hD, ks }))
       })
     })
+    // PENTING: kelas GABUNGAN (satu guru+mapel yang sama diajar bareng utk
+    // beberapa kelas SEKALIGUS) diproses PALING AWAL, sebelum tugas kelas
+    // biasa lainnya -- supaya slotnya masih paling longgar/banyak pilihan
+    // saat dicarikan waktu, sehingga jauh lebih mungkin semua kelas dalam
+    // grup gabungan itu mendapat slot yang SAMA (bukan tercecer beda waktu
+    // karena keburu kehabisan slot kosong akibat diproses belakangan).
+    const isTugasGabungan = (t: T) => daftarKelasGabungan.some(kg => kg.mapelId === t.mapel.id && kg.rombelIds?.includes(t.rId) && kg.rombelIds?.length > 1)
+    semuaTugas.sort((a, b) => Number(isTugasGabungan(b)) - Number(isTugasGabungan(a)))
 
     // ── Fungsi satu percobaan ─────────────────────────────────────────────────
     type Hasil = { arr: any[]; gagal: string[]; req: string[]; ber: string[] }
 
     const acak = <T,>(a: T[]): T[] => { for (let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]} return a }
+    // Acak bertingkat: tugas kelas GABUNGAN tetap didahulukan (diacak di antara
+    // sesamanya), baru kemudian tugas biasa (diacak di antara sesamanya) --
+    // supaya urutan prioritas dari semuaTugas.sort() di atas tidak hilang
+    // begitu saja saat di-acak untuk variasi, tapi keragaman jadwal antar
+    // percobaan generate tetap terjaga.
+    const acakPrioritasGabungan = (a: T[]): T[] => {
+      const gab = acak(a.filter(isTugasGabungan))
+      const biasa = acak(a.filter(t => !isTugasGabungan(t)))
+      return [...gab, ...biasa]
+    }
 
     const satu = (): Hasil => {
       const arr: any[] = jadwalLuar.slice()
@@ -1638,7 +1934,7 @@ export default function JadwalPelajaranPage() {
       // 5. FASE 2 (2JP) HANYA dimulai setelah SELURUH antrian 3JP habis diproses
       // ═══════════════════════════════════════════════════════════════════
 
-      const Q3 = acak(semuaTugas.filter(t=>t.panjang===3).slice())
+      const Q3 = acakPrioritasGabungan(semuaTugas.filter(t=>t.panjang===3).slice())
       Q3.sort((a,b)=>b.hD.size-a.hD.size) // guru paling banyak hari '-' duluan
 
       while (Q3.length>0) {
@@ -1751,7 +2047,7 @@ export default function JadwalPelajaranPage() {
       // FASE 2: Tempatkan semua 2JP
       // Setelah SELURUH 3JP selesai, 2JP boleh masuk slot manapun termasuk sisa window.
       // ═══════════════════════════════════════════════════════════════════
-      const Q2=acak(semuaTugas.filter(t=>t.panjang===2).slice())
+      const Q2=acakPrioritasGabungan(semuaTugas.filter(t=>t.panjang===2).slice())
       Q2.sort((a,b)=>b.hD.size-a.hD.size)
       const hu2=new Map<string,Set<string>>()
       const getHU2=(t:T)=>{const k=`${t.guru.id}_${t.mapel.id}_${t.rId}`;if(!hu2.has(k))hu2.set(k,new Set());return hu2.get(k)!}
@@ -1830,9 +2126,34 @@ export default function JadwalPelajaranPage() {
       const elapsed = Date.now()-t0
       if (!selesai && !cukup && attempt<MAX_ATT && elapsed<MAX_MS && !generateCancelRef.current) { setTimeout(runBatch,0); return }
 
-      setDaftarJadwal(best.arr); save('data_jadwal_pelajaran', best.arr)
+      // ── Perbaikan akhir: KELAS GABUNGAN ──────────────────────────────────
+      // Algoritma generate menjadwalkan tiap (guru,mapel,rombel) sebagai
+      // target TERPISAH, jadi kalau ada kelas gabungan (mis. mapel yang sama
+      // diajar bareng utk Kelas 1A+1B), keduanya bisa saja jatuh di slot yg
+      // BEDA. Di sini kita salin entri yang SUDAH terjadwal ke semua kelas
+      // lain dalam grup gabungan yang sama tapi BELUM kebagian di slot itu
+      // -- selama slotnya memang masih kosong di kelas tujuan (tidak
+      // menimpa jadwal lain yang sudah ada di sana).
+      let arrFinal = [...best.arr]
+      const gabunganTerapkanUlang: string[] = []
+      daftarKelasGabungan.forEach(kg => {
+        if (!kg.rombelIds || kg.rombelIds.length < 2) return
+        arrFinal.filter(j => j.mapelId === kg.mapelId && kg.rombelIds.includes(j.rombelId)).forEach(j => {
+          kg.rombelIds.forEach((ridTujuan: string) => {
+            if (ridTujuan === j.rombelId) return
+            const sudahAda = arrFinal.some(x => x.hari === j.hari && x.waktuId === j.waktuId && x.rombelId === ridTujuan)
+            if (sudahAda) return
+            arrFinal.push({ id: `j-gab-${j.mapelId}-${ridTujuan}-${j.hari}-${j.waktuId}-${Math.random().toString(36).slice(2, 5)}`, hari: j.hari, waktuId: j.waktuId, rombelId: ridTujuan, guruId: j.guruId, mapelId: j.mapelId })
+            const namaR = daftarRombel.find((r: any) => r.id === ridTujuan)?.nama || ridTujuan
+            gabunganTerapkanUlang.push(`${j.hari} — ${namaR}: disalin dari kelas gabungannya`)
+          })
+        })
+      })
+
+      setDaftarJadwal(arrFinal); save('data_jadwal_pelajaran', arrFinal)
       setIsGenerating(false); setGenerateProgress('')
       const bg: string[]=[]
+      if (gabunganTerapkanUlang.length) bg.push(`🟢 KELAS GABUNGAN disalin otomatis (${gabunganTerapkanUlang.length} slot):\\n${gabunganTerapkanUlang.join('\\n')}`)
       // Diagnostik khusus: berapa banyak sesi 3JP yang TIDAK berhasil dipasangkan
       // dengan 3JP lain (solo di luar/dalam window, atau terpaksa FORCE) --
       // supaya kelihatan jelas skala masalahnya, bukan cuma tersembunyi di
@@ -1845,6 +2166,34 @@ export default function JadwalPelajaranPage() {
       if (best.gagal.length) bg.push(`🔴 GAGAL:\n${best.gagal.join('\n')}`)
       if (best.ber.length)   bg.push(`🟠 Beriringan:\n${best.ber.join('\n')}`)
       if (best.req.length)   bg.push(`🟡 Request:\n${best.req.join('\n')}`)
+
+      // Pengecekan AKURAT: bandingkan target seharusnya (semuaTugas) dengan
+      // yang BENAR-BENAR berhasil tertanam di arrFinal -- supaya pesan yang
+      // ditampilkan ke pengguna SELALU akurat, tidak pernah bilang "berhasil"
+      // padahal banyak slot yang sebenarnya masih kosong.
+      const kebutuhanJp = new Map()
+      semuaTugas.forEach(t => {
+        const k = `${t.guru.id}_${t.mapel.id}_${t.rId}`
+        kebutuhanJp.set(k, (kebutuhanJp.get(k) || 0) + t.panjang)
+      })
+      const realisasiJp = new Map()
+      arrFinal.forEach(j => {
+        const k = `${j.guruId}_${j.mapelId}_${j.rombelId}`
+        realisasiJp.set(k, (realisasiJp.get(k) || 0) + 1)
+      })
+      const kekuranganJp: string[] = []
+      kebutuhanJp.forEach((butuh, k) => {
+        const [gId, mId, rId] = k.split('_')
+        const ada = realisasiJp.get(k) || 0
+        if (ada < butuh) {
+          const namaG = daftarGuru.find((g) => g.id === gId)?.nama || gId
+          const namaM = daftarMapel.find((m) => m.id === mId)?.nama || mId
+          const namaR = daftarRombel.find((r) => r.id === rId)?.nama || rId
+          kekuranganJp.push(namaG + ' \u2014 ' + namaM + ' (Kelas ' + namaR + '): butuh ' + butuh + ' JP, baru tergenerate ' + ada + ' JP (kurang ' + (butuh - ada) + ' JP)')
+        }
+      })
+      if (kekuranganJp.length) bg.push('\uD83D\uDD34 BELUM TERGENERATE LENGKAP (' + kekuranganJp.length + ' kombinasi guru+mapel+kelas) \u2014 sisa JP ini HARUS diisi manual lewat Plot Jadwal:\n' + kekuranganJp.join('\n'))
+
       if (!bg.length) alert(`✅ Jadwal sempurna! (percobaan ke-${attempt})`)
       else alert(`Generate selesai (${attempt}x, ${Math.round(elapsed/1000)}d):\n\n${bg.join('\n\n')}`)
     }
@@ -1857,7 +2206,16 @@ export default function JadwalPelajaranPage() {
   // ============================================================
   const handleInlineSave = (hari: string, waktuId: string, rombelId: string, existing: any) => {
     if (!editGuruMapel) {
-      if (existing) { const f = daftarJadwal.filter(j => j.id !== existing.id); setDaftarJadwal(f); save('data_jadwal_pelajaran', f) }
+      if (existing) {
+        // Kalau slot ini bagian dari kelas gabungan, hapus juga entri kembar
+        // di SEMUA kelas lain dalam grup gabungan yang sama -- supaya tidak
+        // ada sisa jadwal "yatim" di kelas lain begitu salah satu dihapus.
+        const kgHapus = daftarKelasGabungan.find(kg => kg.mapelId === existing.mapelId && kg.rombelIds?.includes(rombelId) && kg.rombelIds?.length > 1)
+        const f = kgHapus
+          ? daftarJadwal.filter(j => !(j.hari === hari && j.waktuId === waktuId && j.guruId === existing.guruId && j.mapelId === existing.mapelId && kgHapus.rombelIds.includes(j.rombelId)))
+          : daftarJadwal.filter(j => j.id !== existing.id)
+        setDaftarJadwal(f); save('data_jadwal_pelajaran', f)
+      }
       setEditingCell(null); setEditGuruMapel(''); setEditJumlahJp(null)
       return
     }
@@ -1865,25 +2223,41 @@ export default function JadwalPelajaranPage() {
     const [gId, mId] = editGuruMapel.split('|')
     const jumlahJp = editJumlahJp && editJumlahJp > 1 ? editJumlahJp : 1
 
+    // PENTING: kalau kombinasi guru+mapel ini terdaftar sebagai KELAS GABUNGAN
+    // (satu guru mengajar mapel yang sama utk beberapa kelas SEKALIGUS dalam
+    // satu slot yg sama, mis. gabungan Kelas 1A+1B), maka begitu diisi/di-
+    // generate di SALAH SATU kelasnya, jadwal yang SAMA harus otomatis
+    // muncul juga di SEMUA kelas lain yang tergabung dalam grup itu -- bukan
+    // cuma di kelas yang diklik/diinput.
+    const kelasGabunganTerkait = daftarKelasGabungan.find(kg => kg.mapelId === mId && kg.rombelIds?.includes(rombelId) && kg.rombelIds?.length > 1)
+    const targetRombelIds: string[] = kelasGabunganTerkait ? kelasGabunganTerkait.rombelIds : [rombelId]
+
     if (jumlahJp === 1) {
       // Isi 1 sel saja (perilaku lama, tetap dipertahankan kalau JP-nya cuma 1 pilihan atau tidak dipilih)
-      const hasil = validasiSlot({ hari, waktuId, rombelId, guruId: gId, mapelId: mId, kecuali: existing?.id })
-      if (!hasil.ok) { alert(`⚠️ ${hasil.pesan}`); return }
-      if (existing) {
-        const u = daftarJadwal.map(j => j.id === existing.id ? { ...j, guruId: gId, mapelId: mId } : j)
-        setDaftarJadwal(u); save('data_jadwal_pelajaran', u)
-      } else {
-        const nj = { id: 'jdwl-' + Date.now(), hari, waktuId, rombelId, guruId: gId, mapelId: mId }
-        const u = [...daftarJadwal, nj]; setDaftarJadwal(u); save('data_jadwal_pelajaran', u)
+      // -- tapi diterapkan ke SEMUA kelas dalam grup gabungan sekaligus.
+      for (const rid of targetRombelIds) {
+        const existingDiSlot = daftarJadwal.find(j => j.hari === hari && j.waktuId === waktuId && j.rombelId === rid)
+        const hasil = validasiSlot({ hari, waktuId, rombelId: rid, guruId: gId, mapelId: mId, kecuali: existingDiSlot?.id })
+        if (!hasil.ok) { alert(`⚠️ ${hasil.pesan}${targetRombelIds.length > 1 ? ` (di kelas ${daftarRombel.find((r: any) => r.id === rid)?.nama || rid})` : ''}`); return }
       }
-      if (hasil.info) alert(`ℹ️ ${hasil.info}`)
+      let u = [...daftarJadwal]
+      targetRombelIds.forEach(rid => {
+        const existingDiSlot = u.find(j => j.hari === hari && j.waktuId === waktuId && j.rombelId === rid)
+        if (existingDiSlot) {
+          u = u.map(j => j.id === existingDiSlot.id ? { ...j, guruId: gId, mapelId: mId } : j)
+        } else {
+          u = [...u, { id: 'jdwl-' + Date.now() + '-' + rid, hari, waktuId, rombelId: rid, guruId: gId, mapelId: mId }]
+        }
+      })
+      setDaftarJadwal(u); save('data_jadwal_pelajaran', u)
       setEditingCell(null); setEditGuruMapel(''); setEditJumlahJp(null)
       return
     }
 
     // ── Isi OTOMATIS beberapa sel berturutan sesuai jumlah JP yang dipilih ──
     // (mis. pilih "3 JP" -> otomatis mengisi 3 sel berturutan mulai dari sel
-    // yang diklik, tidak perlu klik & isi satu-satu lagi).
+    // yang diklik, tidak perlu klik & isi satu-satu lagi). Diterapkan ke
+    // SEMUA kelas dalam grup gabungan sekaligus (kalau ada).
     const slotUrutMapel = daftarWaktu.filter(w => w.jenis === 'mapel').sort((a, b) => Number(a.jamKe) - Number(b.jamKe))
     const idxMulai = slotUrutMapel.findIndex(s => s.id === waktuId)
     if (idxMulai < 0) { alert('Slot waktu tidak valid.'); return }
@@ -1893,25 +2267,30 @@ export default function JadwalPelajaranPage() {
       return
     }
 
-    // Validasi SEMUA slot dulu sebelum benar-benar menyimpan apapun (supaya
-    // tidak ada yang "setengah jadi" kalau salah satu slot ternyata bentrok).
+    // Validasi SEMUA slot × SEMUA kelas dalam grup dulu sebelum benar-benar
+    // menyimpan apapun (supaya tidak ada yang "setengah jadi" kalau salah
+    // satu slot/kelas ternyata bentrok).
     for (const s of slotTarget) {
-      const existingDiSlot = daftarJadwal.find(j => j.hari === hari && j.waktuId === s.id && j.rombelId === rombelId)
-      const hasil = validasiSlot({ hari, waktuId: s.id, rombelId, guruId: gId, mapelId: mId, kecuali: existingDiSlot?.id })
-      if (!hasil.ok) { alert(`⚠️ ${hasil.pesan}`); return }
+      for (const rid of targetRombelIds) {
+        const existingDiSlot = daftarJadwal.find(j => j.hari === hari && j.waktuId === s.id && j.rombelId === rid)
+        const hasil = validasiSlot({ hari, waktuId: s.id, rombelId: rid, guruId: gId, mapelId: mId, kecuali: existingDiSlot?.id })
+        if (!hasil.ok) { alert(`⚠️ ${hasil.pesan}${targetRombelIds.length > 1 ? ` (di kelas ${daftarRombel.find((r: any) => r.id === rid)?.nama || rid})` : ''}`); return }
+      }
     }
 
     let u = [...daftarJadwal]
     slotTarget.forEach(s => {
-      const existingDiSlot = u.find(j => j.hari === hari && j.waktuId === s.id && j.rombelId === rombelId)
-      if (existingDiSlot) {
-        u = u.map(j => j.id === existingDiSlot.id ? { ...j, guruId: gId, mapelId: mId } : j)
-      } else {
-        u = [...u, { id: 'jdwl-' + Date.now() + '-' + s.id, hari, waktuId: s.id, rombelId, guruId: gId, mapelId: mId }]
-      }
+      targetRombelIds.forEach(rid => {
+        const existingDiSlot = u.find(j => j.hari === hari && j.waktuId === s.id && j.rombelId === rid)
+        if (existingDiSlot) {
+          u = u.map(j => j.id === existingDiSlot.id ? { ...j, guruId: gId, mapelId: mId } : j)
+        } else {
+          u = [...u, { id: 'jdwl-' + Date.now() + '-' + s.id + '-' + rid, hari, waktuId: s.id, rombelId: rid, guruId: gId, mapelId: mId }]
+        }
+      })
     })
     setDaftarJadwal(u); save('data_jadwal_pelajaran', u)
-    alert(`✅ Berhasil mengisi ${jumlahJp} JP berturutan (${slotTarget.map(s => s.jamKe).join(', ')}) untuk ${hari}.`)
+    alert(`✅ Berhasil mengisi ${jumlahJp} JP berturutan (${slotTarget.map(s => s.jamKe).join(', ')}) untuk ${hari}${targetRombelIds.length > 1 ? ` di ${targetRombelIds.length} kelas gabungan` : ''}.`)
     setEditingCell(null); setEditGuruMapel(''); setEditJumlahJp(null)
   }
 
@@ -1926,9 +2305,72 @@ export default function JadwalPelajaranPage() {
       if (!rec[j.guruId]) rec[j.guruId] = new Set()
       rec[j.guruId].add(`${j.hari}_${j.waktuId}`)
     })
+    // Jadwal Tetap berjenis "mapel" (kelas gabungan) juga terhitung sebagai
+    // jam mengajar guru -- satu sesi gabungan (walau berlaku utk banyak
+    // kelas sekaligus) tetap dihitung SATU slot, bukan dikali jumlah kelas.
+    daftarJadwalTetap.forEach(jt => {
+      if (jt.jenis !== 'mapel' || !jt.guruId) return
+      const sw = daftarWaktu.find(w => w.id === jt.waktuId)
+      if (!sw || sw.jenis !== 'mapel') return
+      const hariList = jt.hari === 'Semua' ? LIST_HARI : [jt.hari]
+      hariList.forEach(h => {
+        if (!rec[jt.guruId!]) rec[jt.guruId!] = new Set()
+        rec[jt.guruId!].add(`${h}_${jt.waktuId}`)
+      })
+    })
     const r: { [k: string]: number } = {}
     Object.keys(rec).forEach(k => { r[k] = rec[k].size })
     return r
+  }
+
+  /** Cek kelengkapan penjadwalan seorang guru: bandingkan total JP yang
+   *  SEHARUSNYA (dari Matriks Alokasi JP, utk semua kombinasi mapel+kelas
+   *  guru ini) dengan yang SUDAH benar-benar terjadwal (dari Plot Jadwal
+   *  biasa MAUPUN Jadwal Berlaku Umum jenis Mata Pelajaran). */
+  const cekKelengkapanJpGuru = (guruId: string): { lengkap: boolean; kekurangan: { mapel: string; kelas: string; butuh: number; ada: number }[] } => {
+    const butuhMap = new Map<string, number>() // key: mapelId_rombelId
+    Object.keys(matriksRinciJp).forEach(k => {
+      const [gId, mId, rId] = k.split('_')
+      if (gId !== guruId) return
+      const jp = hitungJpStr(matriksRinciJp[k])
+      if (jp > 0) butuhMap.set(`${mId}_${rId}`, (butuhMap.get(`${mId}_${rId}`) || 0) + jp)
+    })
+
+    const adaMap = new Map<string, number>()
+    daftarJadwal.forEach(j => {
+      if (j.guruId !== guruId) return
+      const sw = daftarWaktu.find(w => w.id === j.waktuId)
+      if (!sw || sw.jenis !== 'mapel') return
+      const k = `${j.mapelId}_${j.rombelId}`
+      adaMap.set(k, (adaMap.get(k) || 0) + 1)
+    })
+    daftarJadwalTetap.forEach(jt => {
+      if (jt.jenis !== 'mapel' || jt.guruId !== guruId || !jt.mapelId) return
+      const sw = daftarWaktu.find(w => w.id === jt.waktuId)
+      if (!sw || sw.jenis !== 'mapel') return
+      const hariList = jt.hari === 'Semua' ? LIST_HARI : [jt.hari]
+      const rombelTerkait = jt.berlakuUntuk === 'rombel' ? jt.rombelIds : daftarRombel.map((r: any) => r.id)
+      rombelTerkait.forEach(rId => {
+        hariList.forEach(() => {
+          const k = `${jt.mapelId}_${rId}`
+          adaMap.set(k, (adaMap.get(k) || 0) + 1)
+        })
+      })
+    })
+
+    const kekurangan: { mapel: string; kelas: string; butuh: number; ada: number }[] = []
+    butuhMap.forEach((butuh, k) => {
+      const [mId, rId] = k.split('_')
+      const ada = adaMap.get(k) || 0
+      if (ada < butuh) {
+        kekurangan.push({
+          mapel: daftarMapel.find((m: any) => m.id === mId)?.nama || mId,
+          kelas: daftarRombel.find((r: any) => r.id === rId)?.nama || rId,
+          butuh, ada,
+        })
+      }
+    })
+    return { lengkap: kekurangan.length === 0, kekurangan }
   }
 
   const rekapPerHari = (guruId: string) => {
@@ -1949,20 +2391,81 @@ export default function JadwalPelajaranPage() {
     return false
   })
 
+  // Mirip cara kerja Jadwal Berlaku Umum (Jadwal Tetap): kalau kelas ini
+  // bagian dari grup KELAS GABUNGAN, jadwal yang "berlaku" utk kelas ini
+  // dicari dari SEMBARANG anggota grup yang sudah punya data -- BUKAN wajib
+  // dari data milik kelas ini sendiri.
+  const cariJadwalGabunganLintasKelas = (hari: string, waktuId: string, rombelId: string) => {
+    const grup = daftarKelasGabungan.filter(kg => kg.rombelIds?.includes(rombelId) && kg.rombelIds?.length > 1)
+    for (const kg of grup) {
+      const jGab = daftarJadwal.find(jj => jj.hari === hari && jj.waktuId === waktuId && jj.mapelId === kg.mapelId && kg.rombelIds.includes(jj.rombelId))
+      if (jGab) return jGab
+    }
+    return null
+  }
+
+  // Kelompokkan kolom kelas yang BERURUTAN dan punya jadwal TETAP yang SAMA
+  // (mis. "Upacara Bendera" berlaku utk semua kelas) ATAU kelas GABUNGAN yang
+  // sama, jadi satu sel gabung (colSpan) -- supaya tabel Plot Jadwal tidak
+  // perlu mengulang teks yang sama di tiap kolom kelas dan lebih hemat lebar.
+  // Sel jadwal BIASA (bisa diedit per-kelas) TETAP dirender satu per satu
+  // apa adanya, supaya interaksi klik-untuk-edit tidak terganggu.
+  type SegmenSel = { tipe: 'tetap'; rombelIds: string[]; tetapItem: any } | { tipe: 'gabungan'; rombelIds: string[]; jadwalItem: any } | { tipe: 'individual'; rombelId: string }
+  const kelompokkanSelBaris = (hari: string, waktuId: string, rombelList: any[]): SegmenSel[] => {
+    const segmen: SegmenSel[] = []
+    let i = 0
+    while (i < rombelList.length) {
+      const r = rombelList[i]
+      const tetap = getJadwalTetapUntukSlotRender(hari, waktuId, r.id)
+      if (tetap) {
+        const idsGrup = [r.id]
+        let j = i + 1
+        while (j < rombelList.length) {
+          const tetapBerikut = getJadwalTetapUntukSlotRender(hari, waktuId, rombelList[j].id)
+          if (tetapBerikut && tetapBerikut.id === tetap.id) { idsGrup.push(rombelList[j].id); j++ } else break
+        }
+        segmen.push({ tipe: 'tetap', rombelIds: idsGrup, tetapItem: tetap })
+        i = j
+        continue
+      }
+      const jadwalItem = daftarJadwal.find(j2 => j2.hari === hari && j2.waktuId === waktuId && j2.rombelId === r.id) || cariJadwalGabunganLintasKelas(hari, waktuId, r.id)
+      const kelasGabungan = jadwalItem ? daftarKelasGabungan.find(kg => kg.mapelId === jadwalItem.mapelId && kg.rombelIds?.includes(r.id) && kg.rombelIds?.length > 1) : null
+      if (jadwalItem && kelasGabungan) {
+        const idsGrup = [r.id]
+        let j = i + 1
+        while (j < rombelList.length) {
+          // Anggota berikutnya masuk grup gabungan yang sama selama dia
+          // memang terdaftar dalam grup itu (kg.rombelIds) DAN mendapat
+          // jadwal yang SAMA (guru+mapel) di slot ini -- baik dari data
+          // miliknya sendiri MAUPUN dari lookup lintas kelas gabungan.
+          const jBerikut = daftarJadwal.find(j2 => j2.hari === hari && j2.waktuId === waktuId && j2.rombelId === rombelList[j].id) || cariJadwalGabunganLintasKelas(hari, waktuId, rombelList[j].id)
+          const masukGrupSama = jBerikut && jBerikut.guruId === jadwalItem.guruId && jBerikut.mapelId === jadwalItem.mapelId && kelasGabungan.rombelIds.includes(rombelList[j].id)
+          if (masukGrupSama) { idsGrup.push(rombelList[j].id); j++ } else break
+        }
+        segmen.push({ tipe: 'gabungan', rombelIds: idsGrup, jadwalItem })
+        i = j
+        continue
+      }
+      segmen.push({ tipe: 'individual', rombelId: r.id })
+      i++
+    }
+    return segmen
+  }
+
   // ============================================================
   // DOWNLOAD
   // ============================================================
   const handleDownload = () => {
-    let rombelFiltered = urutkanRombelKelas(daftarRombel)
+    let rombelFiltered = dorongKelasGabunganBersebelahan(urutkanRombelKelas(daftarRombel), daftarKelasGabungan)
     let namaUnitTampil = identitasInduk.nama || 'Lembaga'
     let logoKiri = resolveLogoUrl(identitasInduk.logoKiriSumber)
     let logoKanan = resolveLogoUrl(identitasInduk.logoKananSumber)
     let alamat = identitasInduk.alamat || ''
-    let hariList = LIST_HARI // lembaga induk / semua unit: tampilkan s.d Sabtu
+    let hariList = LIST_HARI // jadwal pelajaran: Senin s.d Jumat saja (Sabtu tidak dipakai)
 
     if (downloadTarget !== 'semua') {
       const unit = daftarLembaga.find(l => l.id === downloadTarget)
-      rombelFiltered = urutkanRombelKelas(getRombelsByLembaga(downloadTarget))
+      rombelFiltered = dorongKelasGabunganBersebelahan(urutkanRombelKelas(getRombelsByLembaga(downloadTarget)), daftarKelasGabungan)
       namaUnitTampil = unit?.nama || namaUnitTampil
       logoKiri = resolveLogoUrl(unit?.logoKiriSumber)
       logoKanan = resolveLogoUrl(unit?.logoKananSumber)
@@ -2208,9 +2711,8 @@ export default function JadwalPelajaranPage() {
   const logoInduk = identitasInduk.logo_utama || identitasInduk.logo || ''
 
   const getRombelForUnit = () => {
-    if (modeTampil === 'keseluruhan') return daftarRombel
-    if (unitFilter === 'lembaga-induk') return daftarRombel
-    return getRombelsByLembaga(unitFilter)
+    const dasar = modeTampil === 'keseluruhan' ? daftarRombel : (unitFilter === 'lembaga-induk' ? daftarRombel : getRombelsByLembaga(unitFilter))
+    return dorongKelasGabunganBersebelahan(urutkanRombelKelas(dasar), daftarKelasGabungan)
   }
 
   // Jadwal unit (selain lembaga induk) hanya tampil Senin s.d Jumat
@@ -2386,7 +2888,7 @@ export default function JadwalPelajaranPage() {
           <div className="space-y-6">
             {/* Sub-tab */}
             <div className="flex bg-white rounded-xl border border-slate-200 p-1.5 gap-1 w-fit flex-wrap">
-              {([['identitas', 'Identitas & Kop'], ['gabungan', 'Kelas Gabungan'], ['giliran', 'Jadwal Giliran'], ['tetap', 'Jadwal Berlaku Umum'], ['larangan', 'Larangan Mapel Beriringan'], ['titimangsa', 'Semester, Titimangsa & TTD']] as const).map(([k, l]) => (
+              {([['identitas', 'Identitas & Kop'], ['giliran', 'Jadwal Giliran'], ['tetap', 'Jadwal Berlaku Umum'], ['larangan', 'Larangan Mapel Beriringan'], ['titimangsa', 'Semester, Titimangsa & TTD']] as const).map(([k, l]) => (
                 <button key={k} onClick={() => setSubTabKelas(k)} className={`px-5 py-2 text-xs font-bold rounded-lg transition ${subTabKelas === k ? 'bg-[#6A197D] text-white shadow' : 'text-slate-600 hover:bg-slate-50'}`}>{l}</button>
               ))}
             </div>
@@ -2498,84 +3000,6 @@ export default function JadwalPelajaranPage() {
               </div>
             )}
 
-            {/* SUB: KELAS GABUNGAN */}
-            {subTabKelas === 'gabungan' && (
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-                <form onSubmit={handleSimpanGabungan} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4 xl:col-span-1">
-                  <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-                    <Users className="w-4 h-4 text-emerald-600" />
-                    <h2 className="text-xs font-black text-slate-700">{editGabId ? 'Edit Kelas Gabungan' : 'Daftarkan Kelas Gabungan'}</h2>
-                  </div>
-                  <p className="text-[10px] text-slate-500 leading-relaxed">Untuk mapel yang sengaja digabung antar rombel (diajar bersamaan). Sistem tidak akan menganggapnya bentrok.</p>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Mata Pelajaran</label>
-                    <select value={formGabMapelId} onChange={e => setFormGabMapelId(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-emerald-500 bg-white" required>
-                      <option value="">-- Pilih Mapel --</option>
-                      {daftarMapel.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Pendidik (Opsional)</label>
-                    <select value={formGabGuruId} onChange={e => setFormGabGuruId(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
-                      <option value="">-- Tanpa filter pendidik --</option>
-                      {daftarGuru.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Pilih Rombel (min. 2)</label>
-                    <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto border rounded-xl p-3 bg-slate-50">
-                      {daftarRombel.map(r => (
-                        <label key={r.id} className="flex items-center gap-1.5 text-[10px] font-bold text-slate-600 cursor-pointer">
-                          <input type="checkbox" checked={formGabRombelIds.includes(r.id)} onChange={() => setFormGabRombelIds(prev => prev.includes(r.id) ? prev.filter(x => x !== r.id) : [...prev, r.id])} className="rounded accent-emerald-600" />
-                          {r.nama}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Keterangan (Opsional)</label>
-                    <input type="text" value={formGabKet} onChange={e => setFormGabKet(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-emerald-500" />
-                  </div>
-                  <div className="flex gap-2">
-                    <button type="submit" className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold text-xs shadow-md hover:bg-emerald-700 transition flex items-center justify-center gap-2">
-                      {editGabId ? <Check className="w-4 h-4" /> : <Plus className="w-4 h-4" />} {editGabId ? 'Simpan Perubahan' : 'Simpan Kelas Gabungan'}
-                    </button>
-                    {editGabId && <button type="button" onClick={resetFormGabungan} className="px-4 bg-slate-100 text-slate-600 rounded-xl font-bold text-xs hover:bg-slate-200">Batal</button>}
-                  </div>
-                </form>
-                <div className="xl:col-span-2 space-y-3">
-                  <h2 className="text-xs font-black text-slate-600 uppercase tracking-wider pb-2 border-b border-slate-100">Daftar Kelas Gabungan</h2>
-                  {daftarKelasGabungan.map(kg => {
-                    const namaMapel = daftarMapel.find(m => m.id === kg.mapelId)?.nama || '-'
-                    const namaGuru = kg.guruId ? daftarGuru.find(g => g.id === kg.guruId)?.nama : null
-                    return (
-                      <div key={kg.id} className={`bg-white border rounded-2xl p-5 shadow-sm flex items-start justify-between gap-4 ${editGabId === kg.id ? 'border-amber-300 ring-1 ring-amber-200' : 'border-emerald-100'}`}>
-                        <div className="space-y-1.5">
-                          <div className="flex items-center gap-2">
-                            <Layers className="w-4 h-4 text-emerald-600" />
-                            <span className="font-black text-slate-800 text-sm">{namaMapel}</span>
-                            {namaGuru && <span className="text-[9px] font-bold text-slate-400 uppercase">• {namaGuru}</span>}
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {kg.rombelIds.map((rid: string) => (
-                              <span key={rid} className="bg-emerald-50 text-emerald-700 border border-emerald-100 px-2.5 py-1 rounded-lg text-[10px] font-extrabold">
-                                {daftarRombel.find(r => r.id === rid)?.nama || rid}
-                              </span>
-                            ))}
-                          </div>
-                          {kg.keterangan && <p className="text-[10px] text-slate-400">{kg.keterangan}</p>}
-                        </div>
-                        <div className="flex gap-1.5 shrink-0">
-                          <button onClick={() => handleEditGabungan(kg)} className="p-2 text-slate-400 hover:text-[#6A197D] rounded-lg"><Edit2 className="w-4 h-4" /></button>
-                          <button onClick={() => handleHapusGabungan(kg.id)} className="p-2 text-slate-400 hover:text-red-500 rounded-lg"><Trash2 className="w-4 h-4" /></button>
-                        </div>
-                      </div>
-                    )
-                  })}
-                  {!daftarKelasGabungan.length && <div className="py-16 text-center text-slate-400 text-xs bg-white border border-slate-200 rounded-2xl">Belum ada kelas gabungan.</div>}
-                </div>
-              </div>
-            )}
 
             {/* SUB: JADWAL GILIRAN */}
             {subTabKelas === 'giliran' && (
@@ -2693,12 +3117,62 @@ export default function JadwalPelajaranPage() {
                     <Calendar className="w-4 h-4 text-sky-600" />
                     <h2 className="text-xs font-black text-slate-700">{editTetapId ? 'Edit Jadwal Berlaku Umum' : 'Jadwal Berlaku Umum'}</h2>
                   </div>
-                  <p className="text-[10px] text-slate-500 leading-relaxed">Jadwal yang berlaku untuk semua kelas atau kelompok kelas tertentu, seperti Upacara, Literasi, Kewalikelasan, dst.</p>
+                  <p className="text-[10px] text-slate-500 leading-relaxed">Jadwal yang berlaku untuk semua kelas atau kelompok kelas tertentu. Bisa berupa kegiatan (Upacara, Literasi, Kewalikelasan, dst) ATAU mata pelajaran yang diajar satu guru untuk beberapa kelas sekaligus (menggantikan "Kelas Gabungan").</p>
 
                   <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Nama Kegiatan</label>
-                    <input type="text" value={formTetapNama} onChange={e => setFormTetapNama(e.target.value)} placeholder="Cth: Upacara Bendera, Literasi, Kewalikelasan" className="w-full px-4 py-2.5 border rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-sky-500" required />
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Jenis</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button type="button" onClick={() => setFormTetapJenis('kegiatan')} className={`py-2 rounded-xl text-xs font-bold border transition ${formTetapJenis === 'kegiatan' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>Nama Kegiatan</button>
+                      <button type="button" onClick={() => setFormTetapJenis('mapel')} className={`py-2 rounded-xl text-xs font-bold border transition ${formTetapJenis === 'mapel' ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>Mata Pelajaran</button>
+                    </div>
                   </div>
+
+                  {formTetapJenis === 'kegiatan' ? (
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Nama Kegiatan</label>
+                      <input type="text" value={formTetapNama} onChange={e => setFormTetapNama(e.target.value)} placeholder="Cth: Upacara Bendera, Literasi, Kewalikelasan" className="w-full px-4 py-2.5 border rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-sky-500" required />
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Mata Pelajaran</label>
+                        <select value={formTetapMapelId} onChange={e => setFormTetapMapelId(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+                          <option value="">-- Pilih Mapel --</option>
+                          {daftarMapel.map((m: any) => <option key={m.id} value={m.id}>{m.nama}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Pendidik</label>
+                        <select value={formTetapGuruId} onChange={e => setFormTetapGuruId(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+                          <option value="">-- Pilih Guru --</option>
+                          {daftarGuru.map((g: any) => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                        </select>
+                      </div>
+                      <p className="text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">Untuk kelas gabungan: pilih "Berlaku Untuk" = Kelas Tertentu di bawah, lalu centang minimal 2 kelas yang digabung.</p>
+                      {formTetapGuruId && formTetapMapelId && (() => {
+                        const opsiJp = opsiJpTetapDariMatriks()
+                        if (opsiJp.length === 0) {
+                          return <p className="text-[9px] text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">⚠ Belum ada Alokasi JP untuk kombinasi guru+mapel+kelas ini di Matriks Alokasi JP. Isi dulu di sana supaya JP terisi otomatis.</p>
+                        }
+                        if (opsiJp.length === 1) {
+                          return <p className="text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">✓ Akan otomatis mengisi {opsiJp[0]} JP berturutan (sesuai Matriks Alokasi JP).</p>
+                        }
+                        return (
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Berapa JP? (sesuai Matriks: {opsiJp.join(', ')})</label>
+                            <div className="flex gap-2">
+                              {opsiJp.map(jp => (
+                                <button key={jp} type="button" onClick={() => setFormTetapJumlahJp(jp)}
+                                  className={`flex-1 py-2 rounded-xl text-xs font-extrabold border transition ${formTetapJumlahJp === jp ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200 text-emerald-700 hover:bg-emerald-50'}`}>
+                                  {jp} JP
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })()}
+                    </>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Hari</label>
@@ -3051,10 +3525,52 @@ export default function JadwalPelajaranPage() {
                         {daftarRombel.map(r => {
                           const isPJ = item.rombelRelevant.includes(r.id)
                           const key = `${item.guru.id}_${item.mapel.id}_${r.id}`
+                          const sudahDiBerlakuUmum = daftarJadwalTetap.some(jt =>
+                            jt.jenis === 'mapel' && jt.guruId === item.guru.id && jt.mapelId === item.mapel.id &&
+                            (jt.berlakuUntuk === 'semua' || (jt.berlakuUntuk === 'rombel' && jt.rombelIds?.includes(r.id)) || (jt.berlakuUntuk === 'lembaga' && getRombelLembagaId(r.id) && jt.lembagaIds?.includes(getRombelLembagaId(r.id)!)))
+                          )
+                          if (isPJ && sudahDiBerlakuUmum) {
+                            return (
+                              <td key={r.id} className="p-2 text-center border-l border-slate-100 bg-emerald-50">
+                                <span title="Sudah diatur lewat Jadwal Berlaku Umum -- tidak perlu diisi lagi di sini" className="text-[9px] font-bold text-emerald-700">✓ Berlaku Umum</span>
+                              </td>
+                            )
+                          }
                           return (
                             <td key={r.id} className="p-2 text-center border-l border-slate-100">
                               {isPJ ? (
-                                <input type="text" placeholder="–" value={matriksRinciJp[key] || ''} onChange={e => { const u = { ...matriksRinciJp, [key]: e.target.value }; setMatriksRinciJp(u); save('matriks_alokasi_rinci_samping', u) }} className="w-16 h-8 border border-slate-200 rounded-lg text-center outline-none focus:ring-2 focus:ring-[#8A2FA0] font-extrabold text-xs shadow-sm bg-white" />
+                                <input type="text" placeholder="–" value={matriksRinciJp[key] || ''}
+                                  onChange={e => { const u = { ...matriksRinciJp, [key]: e.target.value }; setMatriksRinciJp(u) }}
+                                  onBlur={e => {
+                                    const nilai = e.target.value.trim()
+                                    if (!nilai) { save('matriks_alokasi_rinci_samping', matriksRinciJp); return }
+                                    const segmen = nilai.split(',').map(x => x.trim()).filter(Boolean)
+                                    const adaSatuJp = segmen.some(s => Number(s) === 1)
+                                    if (adaSatuJp) {
+                                      alert('Alokasi JP per sesi tidak boleh 1 JP. Gunakan minimal 2 JP per sesi (mis. "2" atau "2, 3"), sesuai aturan penjadwalan.')
+                                      const u = { ...matriksRinciJp, [key]: '' }
+                                      setMatriksRinciJp(u)
+                                      save('matriks_alokasi_rinci_samping', u)
+                                      return
+                                    }
+                                    // PENTING: kalau kelas ini bagian dari grup KELAS GABUNGAN untuk
+                                    // mapel ini, otomatis isi JP yang SAMA ke semua kelas lain dalam
+                                    // grup itu juga -- supaya admin tidak perlu mengetik ulang nilai
+                                    // yang sama satu-satu per kelas (dan tidak ada yang kelewatan
+                                    // kosong, yang menyebabkan kelas itu tidak pernah ikut digenerate).
+                                    const kelasGabunganTerkait = daftarKelasGabungan.find((kg: any) => kg.mapelId === item.mapel.id && kg.rombelIds?.includes(r.id) && kg.rombelIds?.length > 1)
+                                    let u = { ...matriksRinciJp, [key]: nilai }
+                                    if (kelasGabunganTerkait) {
+                                      kelasGabunganTerkait.rombelIds.forEach((ridLain: string) => {
+                                        if (ridLain === r.id) return
+                                        const keyLain = `${item.guru.id}_${item.mapel.id}_${ridLain}`
+                                        u[keyLain] = nilai
+                                      })
+                                    }
+                                    setMatriksRinciJp(u)
+                                    save('matriks_alokasi_rinci_samping', u)
+                                  }}
+                                  className="w-16 h-8 border border-slate-200 rounded-lg text-center outline-none focus:ring-2 focus:ring-[#8A2FA0] font-extrabold text-xs shadow-sm bg-white" />
                               ) : <span className="text-slate-300 text-[10px]">–</span>}
                             </td>
                           )
@@ -3069,6 +3585,28 @@ export default function JadwalPelajaranPage() {
                     ))}
                     {!matriksRows.length && <tr><td colSpan={3 + daftarRombel.length} className="py-16 text-center text-slate-400 text-xs">Belum ada pemetaan penugasan guru.</td></tr>}
                   </tbody>
+                  {matriksRows.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-[#F7ECFA] border-t-2 border-[#E3C2ED] font-black text-[#330B40]">
+                        <td colSpan={2} className="p-4 sticky left-0 z-10 bg-[#F7ECFA] border-r border-slate-200">Total JP / Kelas</td>
+                        {daftarRombel.map(r => {
+                          const totalKelas = matriksRows.reduce((sum, item) => {
+                            if (!item.rombelRelevant.includes(r.id)) return sum
+                            return sum + hitungJpStr(matriksRinciJp[`${item.guru.id}_${item.mapel.id}_${r.id}`] || '')
+                          }, 0)
+                          return <td key={r.id} className="p-4 text-center border-l border-sky-100">{totalKelas} JP</td>
+                        })}
+                        <td className="p-4 text-center border-l border-[#E3C2ED] bg-[#F0DFF5]">
+                          {daftarRombel.reduce((grand, r) => {
+                            return grand + matriksRows.reduce((sum, item) => {
+                              if (!item.rombelRelevant.includes(r.id)) return sum
+                              return sum + hitungJpStr(matriksRinciJp[`${item.guru.id}_${item.mapel.id}_${r.id}`] || '')
+                            }, 0)
+                          }, 0)} JP
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             </section>
@@ -3088,6 +3626,7 @@ export default function JadwalPelajaranPage() {
                     <tr className="bg-amber-50 border-b border-amber-200 text-amber-800 font-black tracking-wider">
                       <th className="p-4 min-w-[160px] sticky left-0 z-20 bg-amber-50 border-r border-amber-200">Pendidik</th>
                       {LIST_HARI.map(h => <th key={h} className="p-4 text-center min-w-[110px] border-l border-amber-100 text-[10px]">{h}</th>)}
+                      <th className="p-4 text-center min-w-[90px] border-l border-amber-200 text-[10px] bg-amber-100">Total JP</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-amber-100">
@@ -3102,10 +3641,25 @@ export default function JadwalPelajaranPage() {
                             </td>
                           )
                         })}
+                        <td className="p-2 text-center border-l border-amber-200 bg-amber-50/40 font-black text-amber-800">{rekapJamGuru()[g.id] || 0} JP</td>
                       </tr>
                     ))}
                     {!daftarGuru.length && <tr><td colSpan={7} className="py-8 text-center text-slate-400 text-xs">Belum ada data guru.</td></tr>}
                   </tbody>
+                  {daftarGuru.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-amber-100 border-t-2 border-amber-300 font-black text-amber-900">
+                        <td className="p-4 sticky left-0 z-10 bg-amber-100 border-r border-amber-200">Total JP / Hari</td>
+                        {LIST_HARI.map(h => {
+                          const totalHari = daftarGuru.reduce((sum, g) => sum + hitungJpGuruHari(g.id, h), 0)
+                          return <td key={h} className="p-4 text-center border-l border-amber-200">{totalHari} JP</td>
+                        })}
+                        <td className="p-4 text-center border-l border-amber-300 bg-amber-200">
+                          {daftarGuru.reduce((sum, g) => sum + (rekapJamGuru()[g.id] || 0), 0)} JP
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
               <div className="flex flex-wrap items-end gap-4 pt-2">
@@ -3147,7 +3701,7 @@ export default function JadwalPelajaranPage() {
                 <ClipboardList className="w-5 h-5 text-teal-700" />
                 <div>
                   <h2 className="font-black text-teal-900 text-sm">Jadwal Piket Guru</h2>
-                  <p className="text-[10px] font-semibold text-teal-600 mt-0.5">Pilih lembaga/unit terlebih dahulu, lalu centang nama guru yang bertugas piket pada tiap hari untuk unit tersebut.</p>
+                  <p className="text-[10px] font-semibold text-teal-600 mt-0.5">Pilih lembaga/unit terlebih dahulu, lalu cari nama guru yang bertugas piket pada tiap hari untuk unit tersebut.</p>
                 </div>
               </div>
 
@@ -3188,17 +3742,54 @@ export default function JadwalPelajaranPage() {
                         <tr>
                           {LIST_HARI.slice(0, 5).map(h => {
                             const guruDiLembagaIni = daftarGuru.filter((g: any) => getGuruIdsMengajarDiLembaga(piketFormLembagaId).includes(g.id))
+                            const idTerpilih: string[] = piketDraft[piketFormLembagaId]?.[h] || []
+                            const query = (piketSearchQuery[h] || '').trim().toLowerCase()
+                            const hasilCari = query
+                              ? guruDiLembagaIni.filter((g: any) => !idTerpilih.includes(g.id) && g.nama.toLowerCase().includes(query))
+                              : []
                             return (
                               <td key={h} className="p-3 align-top border-l border-teal-50 bg-white">
-                                <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                                  {guruDiLembagaIni.map(g => (
-                                    <label key={g.id} className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-600 cursor-pointer">
-                                      <input type="checkbox" checked={(piketDraft[piketFormLembagaId]?.[h] || []).includes(g.id)} onChange={() => handleTogglePiket(piketFormLembagaId, h, g.id)} className="rounded accent-teal-600" />
-                                      {g.nama}
-                                    </label>
-                                  ))}
-                                  {!guruDiLembagaIni.length && <span className="text-[9px] text-slate-400">Belum ada guru yang mengajar di unit ini.</span>}
+                                <div className="relative">
+                                  <input
+                                    type="text"
+                                    value={piketSearchQuery[h] || ''}
+                                    onChange={e => setPiketSearchQuery(prev => ({ ...prev, [h]: e.target.value }))}
+                                    placeholder="Cari nama guru..."
+                                    className="w-full text-[10px] font-semibold px-2.5 py-1.5 border border-teal-200 rounded-lg outline-none focus:ring-2 focus:ring-teal-300"
+                                  />
+                                  {query && (
+                                    <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-teal-200 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                                      {hasilCari.length > 0 ? hasilCari.map((g: any) => (
+                                        <button
+                                          key={g.id}
+                                          type="button"
+                                          onClick={() => { handleTogglePiket(piketFormLembagaId, h, g.id); setPiketSearchQuery(prev => ({ ...prev, [h]: '' })) }}
+                                          className="w-full text-left px-2.5 py-1.5 text-[10px] font-semibold text-slate-700 hover:bg-teal-50"
+                                        >
+                                          + {g.nama}
+                                        </button>
+                                      )) : (
+                                        <p className="px-2.5 py-1.5 text-[10px] text-slate-400 italic">Tidak ditemukan.</p>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                  {idTerpilih.map(gid => {
+                                    const g = guruDiLembagaIni.find((x: any) => x.id === gid)
+                                    if (!g) return null
+                                    return (
+                                      <span key={gid} className="flex items-center gap-1 bg-teal-100 text-teal-800 text-[10px] font-semibold px-2 py-1 rounded-full">
+                                        {g.nama}
+                                        <button type="button" onClick={() => handleTogglePiket(piketFormLembagaId, h, gid)} className="text-teal-600 hover:text-teal-900">
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      </span>
+                                    )
+                                  })}
+                                  {idTerpilih.length === 0 && <span className="text-[9px] text-slate-400">Belum ada guru piket.</span>}
+                                </div>
+                                {!guruDiLembagaIni.length && <span className="text-[9px] text-slate-400">Belum ada guru yang mengajar di unit ini.</span>}
                               </td>
                             )
                           })}
@@ -3232,65 +3823,107 @@ export default function JadwalPelajaranPage() {
                 <table className="w-full text-[11px] border-collapse whitespace-nowrap">
                   <thead className="sticky top-0 z-30">
                     <tr className="bg-[#220729] text-white font-black tracking-wider text-[10px] uppercase">
-                      <th className="p-3.5 border-r border-[#330B40] min-w-[90px] sticky left-0 z-20 bg-[#220729]">Waktu</th>
+                      <th className="p-2 border-r border-[#330B40] min-w-[70px] sticky left-0 z-20 bg-[#220729]">Waktu</th>
                       {getRombelForUnit().map(r => (
-                        <th key={r.id} className="p-3.5 border-l border-[#330B40] text-center min-w-[130px]">Kelas {r.nama}</th>
+                        <th key={r.id} className="p-2 border-l border-[#330B40] text-center min-w-[95px]">Kelas {r.nama}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
                     {allSlotsUrut.map(slot => (
                       <tr key={slot.id} className={slot.jenis === 'istirahat' ? 'bg-amber-50' : 'hover:bg-slate-50'}>
-                        <td className="p-3.5 bg-slate-50 border-r border-slate-200 font-black text-[#330B40] sticky left-0 z-10">
-                          <p className="text-[10px] uppercase tracking-widest">{slot.label}</p>
-                          <p className="text-[9px] font-extrabold text-[#6A197D] mt-1">{slot.mulai}–{slot.selesai}</p>
+                        <td className="p-1.5 bg-slate-50 border-r border-slate-200 font-black text-[#330B40] sticky left-0 z-10 text-center">
+                          <p className="text-[9px] font-extrabold text-[#6A197D]">{slot.mulai}–{slot.selesai}</p>
                         </td>
                         {slot.jenis === 'istirahat' ? (
-                          <td colSpan={getRombelForUnit().length} className="text-center text-[10px] font-bold text-amber-700 py-2">— {slot.label} —</td>
+                          <td colSpan={getRombelForUnit().length} className="text-center text-[10px] font-bold text-amber-700 py-1">— {slot.label} —</td>
                         ) : (
-                          getRombelForUnit().map(r => {
-                            const cellKey = `${hariPlotTabel}_${slot.id}_${r.id}`
-                            const jadwalTetap = getJadwalTetapUntukSlotRender(hariPlotTabel, slot.id, r.id)
-                            if (jadwalTetap) {
+                          kelompokkanSelBaris(hariPlotTabel, slot.id, getRombelForUnit()).map((segmen, segIdx) => {
+                            if (segmen.tipe === 'tetap') {
+                              const tetapItem = segmen.tetapItem
+                              if (tetapItem.jenis === 'mapel') {
+                                const mapelTetap = daftarMapel.find((m: any) => m.id === tetapItem.mapelId)
+                                const guruTetap = daftarGuru.find((g: any) => g.id === tetapItem.guruId)
+                                return (
+                                  <td key={`tetap-${segIdx}`} colSpan={segmen.rombelIds.length} className="p-1.5 border-l border-slate-100 text-center align-middle bg-emerald-50">
+                                    <p className="text-[#220729] font-black text-sm leading-none" title={`${mapelTetap?.nama || ''}${guruTetap?.nama ? ' — ' + guruTetap.nama : ''}`}>{mapelTetap?.kode || mapelTetap?.nama || '–'}</p>
+                                  </td>
+                                )
+                              }
                               return (
-                                <td key={r.id} className={`p-3 border-l border-slate-100 text-center align-middle ${jadwalTetap.warna}`}>
-                                  <p className="font-black text-xs leading-none">{jadwalTetap.nama}</p>
+                                <td key={`tetap-${segIdx}`} colSpan={segmen.rombelIds.length} className={`p-1.5 border-l border-slate-100 text-center align-middle ${tetapItem.warna}`}>
+                                  <p className="font-black text-xs leading-none">{tetapItem.nama}</p>
                                 </td>
                               )
                             }
 
+                            // Baik 'gabungan' maupun 'individual' memakai persis logika sel
+                            // biasa di bawah -- bedanya cuma 'gabungan' dirender SATU kali
+                            // dengan colSpan (mewakili semua kelas dalam grupnya), memakai
+                            // kelas PERTAMA dalam grup sebagai representasi untuk keperluan
+                            // klik-untuk-edit (konsisten dengan data kelas gabungan yang
+                            // memang satu penugasan guru+mapel utk semua kelas dalam grup itu).
+                            const r = getRombelForUnit().find((rr: any) => rr.id === (segmen.tipe === 'gabungan' ? segmen.rombelIds[0] : segmen.rombelId))!
+                            const colSpanIni = segmen.tipe === 'gabungan' ? segmen.rombelIds.length : 1
+                            const cellKey = `${hariPlotTabel}_${slot.id}_${r.id}`
                             const jadwalGiliran = daftarJadwalGiliran.find(jg => jg.rombelId === r.id && jg.waktuId === slot.id && jg.hari === hariPlotTabel)
-                            const jadwalItem = daftarJadwal.find(j => j.hari === hariPlotTabel && j.waktuId === slot.id && j.rombelId === r.id)
+                            const jadwalItem = daftarJadwal.find(j => j.hari === hariPlotTabel && j.waktuId === slot.id && j.rombelId === r.id) || cariJadwalGabunganLintasKelas(hariPlotTabel, slot.id, r.id)
                             const mapelItem = daftarMapel.find(m => m.id === jadwalItem?.mapelId)
                             const guruItem = daftarGuru.find(g => g.id === jadwalItem?.guruId)
-                            const isGabungan = jadwalItem ? daftarKelasGabungan.some(kg => kg.mapelId === jadwalItem.mapelId && kg.rombelIds?.includes(r.id) && kg.rombelIds?.length > 1) : false
+                            const isGabungan = segmen.tipe === 'gabungan'
                             const labelGiliran = jadwalGiliran ? jadwalGiliran.mapelGuruList.map(mg => daftarMapel.find(m => m.id === mg.mapelId)?.nama || '').filter(Boolean).join('/') : ''
                             const guruGiliran = jadwalGiliran ? jadwalGiliran.mapelGuruList.map(mg => daftarGuru.find(g => g.id === mg.guruId)?.nama || '').filter(Boolean).join(' / ') : ''
 
                             return (
-                              <td key={r.id} onClick={() => { setEditingCell(cellKey); setEditGuruMapel(jadwalItem ? `${jadwalItem.guruId}|${jadwalItem.mapelId}` : ''); setEditJumlahJp(null) }} className={`p-3 border-l border-slate-100 text-center align-middle cursor-pointer transition-colors relative min-h-[60px] ${editingCell === cellKey ? 'bg-amber-50/70 ring-1 ring-amber-400' : 'hover:bg-[#F7ECFA]/30'}`}>
+                              <td key={r.id} colSpan={colSpanIni} onClick={() => { setEditingCell(cellKey); setEditGuruMapel(jadwalItem ? `${jadwalItem.guruId}|${jadwalItem.mapelId}` : ''); setEditJumlahJp(null); setCariGuruMapel('') }} className={`p-1.5 border-l border-slate-100 text-center align-middle cursor-pointer transition-colors relative min-h-[38px] ${editingCell === cellKey ? 'bg-amber-50/70 ring-1 ring-amber-400' : 'hover:bg-[#F7ECFA]/30'}`}>
                                 {editingCell === cellKey ? (
                                   <div className="flex flex-col gap-1.5 items-center justify-center bg-white p-2.5 rounded-xl border border-slate-100 shadow-xl z-20 absolute top-2 left-2 right-2">
-                                    <select value={editGuruMapel} onChange={e => {
-                                      const val = e.target.value
-                                      setEditGuruMapel(val)
-                                      if (val) {
-                                        const [gIdSel, mIdSel] = val.split('|')
-                                        const opsiJp = hitungTargetTersisaJp(gIdSel, mIdSel, r.id, hariPlotTabel, jadwalItem?.id)
-                                        // Kalau tersisa cuma 1 pilihan (mis. "3" sudah terpakai, tinggal "2"),
-                                        // langsung pakai itu tanpa perlu user memilih lagi.
-                                        setEditJumlahJp(opsiJp.length === 1 ? opsiJp[0] : null)
-                                      } else {
-                                        setEditJumlahJp(null)
-                                      }
-                                    }} onClick={e => e.stopPropagation()} className="w-full text-[9px] font-bold border border-slate-200 rounded-lg px-2 py-1 outline-none bg-slate-50">
-                                      <option value="">-- Kosongkan --</option>
-                                      <optgroup label="Pendidik & Mapel">
-                                        {getMapelGuruUntukRombel(r.id).map(mg => (
-                                          <option key={`${mg.guruId}-${mg.mapelId}`} value={`${mg.guruId}|${mg.mapelId}`}>{mg.guruNama} – {mg.mapelNama}</option>
-                                        ))}
-                                      </optgroup>
-                                    </select>
+                                {(() => {
+                                  const opsiSemua = getMapelGuruUntukRombel(r.id)
+                                  const terpilih = editGuruMapel ? opsiSemua.find(mg => `${mg.guruId}|${mg.mapelId}` === editGuruMapel) : null
+                                  const queryCari = cariGuruMapel.trim().toLowerCase()
+                                  const hasilCari = queryCari
+                                    ? opsiSemua.filter(mg => (mg.guruNama + ' ' + mg.mapelNama).toLowerCase().includes(queryCari)).slice(0, 8)
+                                    : []
+                                  const pilihOpsi = (mg: any) => {
+                                    const val = `${mg.guruId}|${mg.mapelId}`
+                                    setEditGuruMapel(val)
+                                    setCariGuruMapel('')
+                                    const opsiJp = hitungTargetTersisaJp(mg.guruId, mg.mapelId, r.id, hariPlotTabel, jadwalItem?.id)
+                                    setEditJumlahJp(opsiJp.length === 1 ? opsiJp[0] : null)
+                                  }
+                                  return (
+                                    <div className="w-full relative" onClick={e => e.stopPropagation()}>
+                                      {terpilih ? (
+                                        <div className="flex items-center justify-between gap-1 bg-[#F7ECFA] border border-[#E3C2ED] rounded-lg px-2 py-1.5">
+                                          <span className="text-[9px] font-bold text-[#571466] truncate">{terpilih.guruNama} – {terpilih.mapelNama}</span>
+                                          <button onClick={() => { setEditGuruMapel(''); setEditJumlahJp(null) }} className="text-[#8A3499] hover:text-[#571466] shrink-0"><X className="w-3 h-3" /></button>
+                                        </div>
+                                      ) : (
+                                        <input
+                                          type="text"
+                                          autoFocus
+                                          value={cariGuruMapel}
+                                          onChange={e => setCariGuruMapel(e.target.value)}
+                                          placeholder="Cari nama guru/mapel..."
+                                          className="w-full text-[9px] font-bold border border-slate-200 rounded-lg px-2 py-1.5 outline-none bg-slate-50 focus:ring-1 focus:ring-[#8A2FA0]"
+                                        />
+                                      )}
+                                      {queryCari && !terpilih && (
+                                        <div className="absolute z-30 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-36 overflow-y-auto">
+                                          {hasilCari.length > 0 ? hasilCari.map(mg => (
+                                            <button key={`${mg.guruId}-${mg.mapelId}`} type="button" onClick={() => pilihOpsi(mg)}
+                                              className="w-full text-left px-2 py-1.5 text-[9px] font-semibold text-slate-700 hover:bg-[#F7ECFA] border-b border-slate-50 last:border-0">
+                                              {mg.guruNama} – {mg.mapelNama}
+                                            </button>
+                                          )) : (
+                                            <p className="px-2 py-1.5 text-[9px] text-slate-400 italic">Tidak ditemukan.</p>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
+                                })()}
                                     {editGuruMapel && (() => {
                                       const [gIdSel, mIdSel] = editGuruMapel.split('|')
                                       const kuotaSel = matriksRinciJp[`${gIdSel}_${mIdSel}_${r.id}`] || ''
@@ -3327,8 +3960,7 @@ export default function JadwalPelajaranPage() {
                                   <div className="relative">
                                     {isGabungan && <span title="Kelas Gabungan" className="absolute -top-1 -right-1"><Layers className="w-3 h-3 text-emerald-500" /></span>}
                                     {jadwalGiliran && <span title="Jadwal Giliran" className="absolute -top-1 -left-1"><RotateCcw className="w-3 h-3 text-violet-500" /></span>}
-                                    <p className="text-[#220729] font-black text-xs leading-none">{mapelItem?.nama || '–'}</p>
-                                    <p className="text-slate-400 font-semibold text-[9px] mt-1.5 truncate max-w-[90px] mx-auto">{guruItem?.nama || '–'}</p>
+                                    <p className="text-[#220729] font-black text-sm leading-none" title={`${mapelItem?.nama || ''}${guruItem?.nama ? ' — ' + guruItem.nama : ''}`}>{mapelItem?.kode || mapelItem?.nama || '–'}</p>
                                   </div>
                                 ) : (
                                   jadwalGiliran ? (
@@ -3387,6 +4019,7 @@ export default function JadwalPelajaranPage() {
                     <th className="p-4 sticky left-0 z-20 bg-slate-50 border-r border-slate-200 min-w-[140px]">Pendidik</th>
                     {bolehEdit && <th className="p-4">Mapel Diampu</th>}
                     {bolehEdit && <th className="p-4 text-center">Total JP</th>}
+                    {bolehEdit && <th className="p-4 text-center">Status Penjadwalan</th>}
                     {bolehEdit && <th className="p-4">JP per Hari</th>}
                     <th className="p-4 text-center">Unduh</th>
                   </tr>
@@ -3410,6 +4043,29 @@ export default function JadwalPelajaranPage() {
                           <span className="bg-emerald-50 text-emerald-800 border border-emerald-100 font-black px-4 py-1.5 rounded-xl text-xs whitespace-nowrap inline-block">{totalJp} JP</span>
                         </td>
                         )}
+                        {bolehEdit && (() => {
+                          const status = cekKelengkapanJpGuru(g.id)
+                          return (
+                            <td className="p-4 text-center">
+                              {status.lengkap ? (
+                                <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold px-3 py-1.5 rounded-xl text-[11px]">
+                                  <CheckCircle className="w-3.5 h-3.5" /> Lengkap
+                                </span>
+                              ) : (
+                                <div className="text-left" title="Beberapa mapel/kelas belum tergenerate lengkap">
+                                  <span className="inline-flex items-center gap-1 bg-rose-50 text-rose-700 border border-rose-200 font-bold px-3 py-1.5 rounded-xl text-[11px] mb-1">
+                                    <Ban className="w-3.5 h-3.5" /> Belum lengkap ({status.kekurangan.length})
+                                  </span>
+                                  <ul className="text-[10px] text-rose-600 space-y-0.5 pl-1">
+                                    {status.kekurangan.map((k, i) => (
+                                      <li key={i}>{k.mapel} (Kelas {k.kelas}): butuh {k.butuh} JP, baru {k.ada} JP</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </td>
+                          )
+                        })()}
                         {bolehEdit && (
                         <td className="p-4">
                           <div className="flex flex-wrap gap-1.5">
@@ -3516,7 +4172,7 @@ export default function JadwalPelajaranPage() {
                                   )
 
                                   const giliran = daftarJadwalGiliran.find(jg => jg.rombelId === r.id && jg.waktuId === slot.id && jg.hari === hari)
-                                  const j = daftarJadwal.find(jj => jj.hari === hari && jj.waktuId === slot.id && jj.rombelId === r.id)
+                                  const j = daftarJadwal.find(jj => jj.hari === hari && jj.waktuId === slot.id && jj.rombelId === r.id) || cariJadwalGabunganLintasKelas(hari, slot.id, r.id)
                                   const mapel = daftarMapel.find(m => m.id === j?.mapelId)
                                   const guru = daftarGuru.find(g => g.id === j?.guruId)
                                   const isGab = j ? daftarKelasGabungan.some(kg => kg.mapelId === j.mapelId && kg.rombelIds?.includes(r.id) && kg.rombelIds?.length > 1) : false
@@ -3527,8 +4183,7 @@ export default function JadwalPelajaranPage() {
                                     <td key={r.id} className={`p-3 text-center border-l border-slate-100 ${isGab ? 'bg-emerald-50/40' : ''}`}>
                                       {j ? (
                                         <div>
-                                          <p className="font-black text-slate-800 text-xs leading-none">{mapel?.nama || '–'}</p>
-                                          <p className="text-slate-500 text-[9px] mt-1">{guru?.nama || '–'}</p>
+                                          <p className="font-black text-slate-800 text-sm leading-none" title={`${mapel?.nama || ''}${guru?.nama ? ' — ' + guru.nama : ''}`}>{(mapel as any)?.kode || mapel?.nama || '–'}</p>
                                           {isGab && <span className="text-[8px] text-emerald-600 font-bold">Gabungan</span>}
                                         </div>
                                       ) : giliran ? (
