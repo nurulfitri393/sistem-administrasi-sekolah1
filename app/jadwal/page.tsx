@@ -1574,6 +1574,19 @@ export default function JadwalPelajaranPage() {
       return { ok: false, pesan: `${namaM} untuk ${namaG} di kelas ini SUDAH diatur lewat Jadwal Berlaku Umum. Tidak bisa diisi manual lagi di sini (supaya tidak dobel) -- kalau mau ubah, edit lewat menu Jadwal Berlaku Umum.` }
     }
 
+    // Guru ini sudah "sibuk" di jam ini karena ada Jadwal Berlaku Umum
+    // (kegiatan ATAU mata pelajaran) yang melibatkan dia di hari+jam yang
+    // sama -- tidak boleh dijadwalkan mengajar hal lain di jam yang sama.
+    const bentrokDiBerlakuUmum = daftarJadwalTetap.find(jt => {
+      if (jt.guruId !== guruId) return false
+      const hariOk = jt.hari === hari || jt.hari === 'Semua'
+      if (!hariOk || jt.waktuId !== waktuId) return false
+      return true
+    })
+    if (bentrokDiBerlakuUmum) {
+      return { ok: false, pesan: `BENTROK PENDIDIK: ${namaG} sudah terjadwal di Jadwal Berlaku Umum ("${bentrokDiBerlakuUmum.nama}") pada ${hari} jam yang sama.` }
+    }
+
     const bentrokGuru = daftarJadwal.find(j => {
       if (j.id === kecuali) return false
       if (!(j.hari === hari && j.waktuId === waktuId && j.guruId === guruId)) return false
@@ -1877,6 +1890,12 @@ export default function JadwalPelajaranPage() {
       }
 
       // tanam biasa: cek konflik guru + kelas + jadwal tetap + guru masuk kelas sama 2x sehari
+      // Guru dianggap "sibuk" di suatu hari+slot kalau dia terlibat di Jadwal
+      // Berlaku Umum (kegiatan ATAU mata pelajaran) pada hari+slot itu --
+      // tidak boleh dijadwalkan mengajar hal lain di waktu yang sama.
+      const guruSibukDiBerlakuUmum = (gId: string, hari: string, waktuId: string): boolean =>
+        daftarJadwalTetap.some(jt => jt.guruId === gId && (jt.hari === hari || jt.hari === 'Semua') && jt.waktuId === waktuId)
+
       const tanam = (arr:any[], hari:string, blok:any[], rId:string, gId:string, mId:string):boolean => {
         // Aturan keras: satu guru TIDAK BOLEH masuk ke rombel yang sama dua kali
         // dalam satu hari, walau beda mata pelajaran/jam (kecuali sebagai bagian
@@ -1886,6 +1905,7 @@ export default function JadwalPelajaranPage() {
           if (arr.some(x=>x.hari===hari&&x.waktuId===s.id&&x.guruId===gId&&x.rombelId!==rId)) return false
           if (arr.some(x=>x.hari===hari&&x.waktuId===s.id&&x.rombelId===rId)) return false
           if (getTetap(hari,s.id,rId)) return false
+          if (guruSibukDiBerlakuUmum(gId,hari,s.id)) return false
         }
         for (const s of blok) arr.push({id:`j-${gId}-${rId}-${mId}-${hari}-${s.id}-${Math.random().toString(36).slice(2,5)}`,hari,waktuId:s.id,rombelId:rId,guruId:gId,mapelId:mId})
         return true
@@ -1896,6 +1916,7 @@ export default function JadwalPelajaranPage() {
         for (const s of blok) {
           if (arr.some(x=>x.hari===hari&&x.waktuId===s.id&&x.rombelId===rId)) return false
           if (getTetap(hari,s.id,rId)) return false
+          if (guruSibukDiBerlakuUmum(gId,hari,s.id)) return false
         }
         for (const s of blok) arr.push({id:`j-${gId}-${rId}-${mId}-${hari}-${s.id}-${Math.random().toString(36).slice(2,5)}`,hari,waktuId:s.id,rombelId:rId,guruId:gId,mapelId:mId})
         return true
