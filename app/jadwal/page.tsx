@@ -945,6 +945,20 @@ export default function JadwalPelajaranPage() {
   // Modal & state untuk unduhan jadwal PER-GURU (satu-satu atau ZIP semua)
   const [showDownloadGuruModal, setShowDownloadGuruModal] = useState(false)
   const [guruDownloadTarget, setGuruDownloadTarget] = useState<string>('semua-zip')
+
+  // Akun GURU murni (akses hanya-lihat, TANPA izin edit jadwal) HANYA boleh
+  // melihat/mengunduh jadwal MILIKNYA SENDIRI di modal ini. Guru yang diberi
+  // izin EDIT jadwal (mis. peran "Admin SMP"/"Kurikulum") tetap butuh akses
+  // ke jadwal guru lain untuk keperluan pengelolaan, jadi TIDAK dikunci.
+  const guruLoginId = (() => {
+    if (bolehEdit) return null
+    const info = getAksesInfo(); return info.isGuru ? info.guruId : null
+  })()
+  const daftarGuruUntukUnduh = guruLoginId ? daftarGuru.filter((g: any) => g.id === guruLoginId) : daftarGuru
+
+  useEffect(() => {
+    if (guruLoginId && guruDownloadTarget !== guruLoginId) setGuruDownloadTarget(guruLoginId)
+  }, [guruLoginId])
   const [sedangMengunduhGuru, setSedangMengunduhGuru] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const previewRef = useRef<string | null>(null)
@@ -2839,6 +2853,10 @@ export default function JadwalPelajaranPage() {
 
   // Dipanggil dari tombol "Unduh" pada modal: arahkan ke unduhan satu guru atau ZIP semua, sesuai pilihan.
   const handleProsesDownloadGuru = async () => {
+    if (guruLoginId && guruDownloadTarget !== guruLoginId) {
+      alert('Anda hanya berwenang mengunduh jadwal Anda sendiri.')
+      return
+    }
     if (guruDownloadTarget === 'semua-zip') {
       await handleDownloadSemuaGuruZip()
     } else {
@@ -2850,6 +2868,10 @@ export default function JadwalPelajaranPage() {
 
   const handleProsesPreviewGuru = async () => {
     if (guruDownloadTarget === 'semua-zip') return // ZIP berisi banyak file, tidak bisa dipratinjau sebagai satu dokumen
+    if (guruLoginId && guruDownloadTarget !== guruLoginId) {
+      alert('Anda hanya berwenang melihat jadwal Anda sendiri.')
+      return
+    }
     const guru = daftarGuru.find(g => g.id === guruDownloadTarget)
     if (guru) await handleDownloadSatuGuru(guru, 'preview')
   }
@@ -4457,14 +4479,16 @@ export default function JadwalPelajaranPage() {
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 block">Pilih Cakupan</label>
                   <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                    <label className="flex items-center gap-3 p-3 border rounded-xl cursor-pointer hover:bg-slate-50 transition">
-                      <input type="radio" name="dlg" value="semua-zip" checked={guruDownloadTarget === 'semua-zip'} onChange={() => setGuruDownloadTarget('semua-zip')} className="accent-[#6A197D]" />
-                      <div>
-                        <p className="font-bold text-sm text-slate-800">Semua Guru (ZIP)</p>
-                        <p className="text-[10px] text-slate-500">Satu file ZIP berisi PDF jadwal untuk setiap pendidik ({daftarGuru.length} guru).</p>
-                      </div>
-                    </label>
-                    {daftarGuru.map(g => (
+                    {!guruLoginId && (
+                      <label className="flex items-center gap-3 p-3 border rounded-xl cursor-pointer hover:bg-slate-50 transition">
+                        <input type="radio" name="dlg" value="semua-zip" checked={guruDownloadTarget === 'semua-zip'} onChange={() => setGuruDownloadTarget('semua-zip')} className="accent-[#6A197D]" />
+                        <div>
+                          <p className="font-bold text-sm text-slate-800">Semua Guru (ZIP)</p>
+                          <p className="text-[10px] text-slate-500">Satu file ZIP berisi PDF jadwal untuk setiap pendidik ({daftarGuru.length} guru).</p>
+                        </div>
+                      </label>
+                    )}
+                    {daftarGuruUntukUnduh.map(g => (
                       <label key={g.id} className="flex items-center gap-3 p-3 border rounded-xl cursor-pointer hover:bg-slate-50 transition">
                         <input type="radio" name="dlg" value={g.id} checked={guruDownloadTarget === g.id} onChange={() => setGuruDownloadTarget(g.id)} className="accent-[#6A197D]" />
                         <div>

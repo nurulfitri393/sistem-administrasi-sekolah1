@@ -136,10 +136,10 @@ export default function Sidebar() {
   return (
     <>
       {/* ── TOP BAR KHUSUS HP/TABLET (md ke bawah) ── */}
-      <div className="font-opensans md:hidden sticky top-0 z-40 flex items-center gap-3 h-16 px-4 bg-white border-b-2 border-[#FFDE59] shadow-sm">
+      <div className="font-opensans md:hidden sticky top-0 z-40 flex items-center gap-3 min-h-[64px] py-2 px-4 bg-white border-b-2 border-[#FFDE59] shadow-sm">
         <button
           onClick={() => setMobileOpen(true)}
-          className="p-2 -ml-2 rounded-lg text-[#6A197D] hover:bg-[#F7ECFA] transition"
+          className="p-2 -ml-2 rounded-lg text-[#6A197D] hover:bg-[#F7ECFA] transition shrink-0"
           aria-label="Buka menu"
         >
           <Menu className="w-6 h-6" />
@@ -147,7 +147,7 @@ export default function Sidebar() {
         {logoInduk
           ? <img src={logoInduk} alt="Logo" className="w-7 h-7 object-contain shrink-0" />
           : <Landmark className="w-5 h-5 text-[#6A197D] shrink-0" />}
-        <h2 className="font-baloo text-xs font-bold text-[#220729] uppercase tracking-widest truncate">{namaInduk}</h2>
+        <h2 className="font-baloo text-xs font-bold text-[#220729] uppercase tracking-widest leading-tight line-clamp-2 min-w-0">{namaInduk}</h2>
       </div>
 
       {/* ── DRAWER MENU UNTUK HP/TABLET ── */}
@@ -156,12 +156,12 @@ export default function Sidebar() {
           <div className="absolute inset-0 bg-black/40" onClick={() => setMobileOpen(false)} />
           <aside className="relative font-opensans w-72 max-w-[85vw] bg-white flex flex-col justify-between h-full overflow-y-auto shadow-2xl animate-in slide-in-from-left">
             <div>
-              <div className="h-16 flex items-center justify-between px-4 border-b-2 border-[#FFDE59] bg-[#F7ECFA]/40">
+              <div className="min-h-[64px] flex items-center justify-between px-4 py-2.5 border-b-2 border-[#FFDE59] bg-[#F7ECFA]/40">
                 <div className="flex items-center gap-2.5 min-w-0">
                   {logoInduk
                     ? <img src={logoInduk} alt="Logo" className="w-7 h-7 object-contain shrink-0" />
                     : <Landmark className="w-5 h-5 text-[#6A197D] shrink-0" />}
-                  <h2 className="font-baloo text-xs font-bold text-[#220729] uppercase tracking-widest truncate">{namaInduk}</h2>
+                  <h2 className="font-baloo text-xs font-bold text-[#220729] uppercase tracking-widest leading-tight line-clamp-2 min-w-0">{namaInduk}</h2>
                 </div>
                 <button onClick={() => setMobileOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 shrink-0" aria-label="Tutup menu">
                   <X className="w-5 h-5" />
@@ -177,12 +177,12 @@ export default function Sidebar() {
       {/* ── SIDEBAR TETAP UNTUK DESKTOP (md ke atas) ── */}
       <aside className="font-opensans w-72 bg-white border-r border-slate-200 flex-col justify-between hidden md:flex sticky top-0 h-screen shrink-0">
         <div className="overflow-y-auto">
-          <div className="h-20 flex flex-col justify-center px-6 border-b-2 border-[#FFDE59] bg-[#F7ECFA]/40">
+          <div className="min-h-[80px] flex flex-col justify-center px-6 py-3 border-b-2 border-[#FFDE59] bg-[#F7ECFA]/40">
             <div className="flex items-center gap-3">
               {logoInduk
                 ? <img src={logoInduk} alt="Logo" className="w-8 h-8 object-contain shrink-0" />
                 : <Landmark className="w-6 h-6 text-[#6A197D] shrink-0" />}
-              <h2 className="font-baloo text-xs font-bold text-[#220729] uppercase tracking-widest truncate">{namaInduk}</h2>
+              <h2 className="font-baloo text-xs font-bold text-[#220729] uppercase tracking-widest leading-tight line-clamp-2 min-w-0">{namaInduk}</h2>
             </div>
           </div>
           {renderNav()}
