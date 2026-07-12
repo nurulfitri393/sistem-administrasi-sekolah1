@@ -26,7 +26,7 @@ interface GuruRingkas {
   peranIds?: string[]
 }
 interface PeranRingkas { id: string; nama: string }
-interface UnitLembaga { id: string; nama?: string; npsn?: string; alamat?: string; logo?: string; kop?: string }
+interface UnitLembaga { id: string; nama?: string; npsn?: string; alamat?: string; logo?: string; kop?: string; ttdKepala?: string; ttdWakakur?: string }
 
 export interface IdentitasOtomatis {
   namaLembaga: string
@@ -36,6 +36,8 @@ export interface IdentitasOtomatis {
   kop: string
   namaMudir: string
   nipMudir: string
+  ttdMudir: string
+  ttdWakakurPusat: string
   unitList: {
     id: string
     nama: string
@@ -45,6 +47,8 @@ export interface IdentitasOtomatis {
     kop: string
     namaKepala: string
     nipKepala: string
+    ttdKepala: string
+    ttdWakakur: string
   }[]
 }
 
@@ -92,6 +96,8 @@ export function ambilIdentitasOtomatis(): IdentitasOtomatis | null {
         kop: u.kop || '',
         namaKepala: kepsek?.nama || '',
         nipKepala: kepsek ? ambilNipGuru(kepsek) : '',
+        ttdKepala: u.ttdKepala || '',
+        ttdWakakur: u.ttdWakakur || '',
       }
     })
 
@@ -103,6 +109,8 @@ export function ambilIdentitasOtomatis(): IdentitasOtomatis | null {
       kop: induk.kop || '',
       namaMudir: mudir?.nama || '',
       nipMudir: mudir ? ambilNipGuru(mudir) : '',
+      ttdMudir: induk.ttdKepala || '',
+      ttdWakakurPusat: induk.ttdWakakur || '',
       unitList,
     }
   } catch {
@@ -111,9 +119,9 @@ export function ambilIdentitasOtomatis(): IdentitasOtomatis | null {
 }
 
 /** Ambil Kepala Sekolah untuk SATU unit tertentu (dipakai kalau tidak butuh seluruh unitList). */
-export function ambilKepalaSekolahUnit(unitId: string): { nama: string; nip: string } | null {
+export function ambilKepalaSekolahUnit(unitId: string): { nama: string; nip: string; ttd: string } | null {
   const identitas = ambilIdentitasOtomatis()
   const unit = identitas?.unitList.find(u => u.id === unitId)
   if (!unit) return null
-  return { nama: unit.namaKepala, nip: unit.nipKepala }
+  return { nama: unit.namaKepala, nip: unit.nipKepala, ttd: unit.ttdKepala }
 }

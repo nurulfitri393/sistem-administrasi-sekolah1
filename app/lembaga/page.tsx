@@ -17,7 +17,7 @@ export default function IdentitasLembagaPage() {
   
   // State Identitas Lembaga Yayasan Induk (Pusat) - Input manual nama Mudir dihilangkan
   const [identitasInduk, setIdentitasInduk] = useState({
-    nama: 'Lembaga / Yayasan Pusat', npsn: '', alamat: '', logo_utama: '', logo: '', kop: ''
+    nama: 'Lembaga / Yayasan Pusat', npsn: '', alamat: '', logo_utama: '', logo: '', kop: '', ttdKepala: '', ttdWakakur: ''
   })
   
   // Master Unit Lembaga Cabang
@@ -27,6 +27,8 @@ export default function IdentitasLembagaPage() {
   const [alamatCabang, setAlamatCabang] = useState('')
   const [logoCabang, setLogoCabang] = useState('')
   const [kopCabang, setKopCabang] = useState('')
+  const [ttdKepalaCabang, setTtdKepalaCabang] = useState('')
+  const [ttdWakakurCabang, setTtdWakakurCabang] = useState('')
 
   // State Referensi Guru & Peran
   const [daftarGuru, setDaftarGuru] = useState<any[]>([])
@@ -50,7 +52,9 @@ export default function IdentitasLembagaPage() {
             alamat: parsed.alamat || '',
             logo_utama: parsed.logo_utama || '',
             logo: parsed.logo || '',
-            kop: parsed.kop || ''
+            kop: parsed.kop || '',
+            ttdKepala: parsed.ttdKepala || '',
+            ttdWakakur: parsed.ttdWakakur || ''
           })
           setNamaInduk(parsed.nama || 'Lembaga / Yayasan Pusat')
         }
@@ -109,7 +113,8 @@ export default function IdentitasLembagaPage() {
     if (!cabangDipilih) return
 
     const updated = daftarLembaga.map(item => item.id === cabangDipilih.id ? {
-      ...item, npsn: npsnCabang || '', alamat: alamatCabang || '', logo: logoCabang || '', kop: kopCabang || ''
+      ...item, npsn: npsnCabang || '', alamat: alamatCabang || '', logo: logoCabang || '', kop: kopCabang || '',
+      ttdKepala: ttdKepalaCabang || '', ttdWakakur: ttdWakakurCabang || ''
     } : item)
 
     setDaftarLembaga(updated)
@@ -124,6 +129,8 @@ export default function IdentitasLembagaPage() {
     setAlamatCabang(found?.alamat || '')
     setLogoCabang(found?.logo || '')
     setKopCabang(found?.kop || '')
+    setTtdKepalaCabang(found?.ttdKepala || '')
+    setTtdWakakurCabang(found?.ttdWakakur || '')
   }
 
   // --- DETEKSI OTOMATIS: NAMA MUDIR PUSAT ---
@@ -215,6 +222,20 @@ export default function IdentitasLembagaPage() {
                   {identitasInduk.kop && <img src={identitasInduk.kop} alt="Kop" className="h-10 mt-2 object-contain border p-1 rounded-lg bg-white" />}
                 </div>
              </div>
+
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-100">
+                <div>
+                  <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider mb-2 block">Tanda Tangan Kepala Sekolah / Mudir Pusat</label>
+                  <input type="file" accept="image/*" onChange={async (e) => { const url = await handleUploadFile(e); if(url) setIdentitasInduk({...identitasInduk, ttdKepala: url}) }} className="text-xs file:bg-[#F7ECFA] file:text-[#57146A] file:border-0 file:rounded-lg file:px-3 file:py-1.5" />
+                  {identitasInduk.ttdKepala && <img src={identitasInduk.ttdKepala} alt="TTD Kepala" className="h-14 mt-2 object-contain border p-1 rounded-lg bg-white" />}
+                  <p className="text-[9px] text-slate-400 mt-1">Unggah foto/scan tanda tangan (latar putih/transparan) -- akan otomatis tercetak di dokumen (Prota, Promes, Kaldik, dll) tanpa perlu tanda tangan basah lagi.</p>
+                </div>
+                <div>
+                  <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider mb-2 block">Tanda Tangan Waka Kurikulum Pusat</label>
+                  <input type="file" accept="image/*" onChange={async (e) => { const url = await handleUploadFile(e); if(url) setIdentitasInduk({...identitasInduk, ttdWakakur: url}) }} className="text-xs file:bg-[#F7ECFA] file:text-[#57146A] file:border-0 file:rounded-lg file:px-3 file:py-1.5" />
+                  {identitasInduk.ttdWakakur && <img src={identitasInduk.ttdWakakur} alt="TTD Wakakur" className="h-14 mt-2 object-contain border p-1 rounded-lg bg-white" />}
+                </div>
+             </div>
              <button type="submit" className="w-full bg-[#6A197D] hover:bg-[#57146A] text-white py-3 rounded-xl font-baloo font-bold shadow-md transition-all flex items-center justify-center gap-2">
                 <Save className="w-4 h-4" /> Simpan Konfigurasi Pusat
              </button>
@@ -276,6 +297,19 @@ export default function IdentitasLembagaPage() {
                           <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider mb-2 block">Kop Surat Resmi Cabang</label>
                           <input type="file" accept="image/*" onChange={async (e) => { const url = await handleUploadFile(e); if(url) setKopCabang(url) }} className="text-xs file:bg-[#F7ECFA] file:text-[#57146A] file:border-0 file:rounded-lg file:px-3 file:py-1.5" />
                           {kopCabang && <img src={kopCabang} alt="Kop Surat Cabang" className="h-10 mt-2 border p-0.5 rounded-lg object-contain bg-white" />}
+                       </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-100">
+                       <div>
+                          <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider mb-2 block">Tanda Tangan Kepala Sekolah Unit</label>
+                          <input type="file" accept="image/*" onChange={async (e) => { const url = await handleUploadFile(e); if(url) setTtdKepalaCabang(url) }} className="text-xs file:bg-[#F7ECFA] file:text-[#57146A] file:border-0 file:rounded-lg file:px-3 file:py-1.5" />
+                          {ttdKepalaCabang && <img src={ttdKepalaCabang} alt="TTD Kepala Unit" className="h-14 mt-2 border p-0.5 rounded-lg object-contain bg-white" />}
+                       </div>
+                       <div>
+                          <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider mb-2 block">Tanda Tangan Waka Kurikulum Unit</label>
+                          <input type="file" accept="image/*" onChange={async (e) => { const url = await handleUploadFile(e); if(url) setTtdWakakurCabang(url) }} className="text-xs file:bg-[#F7ECFA] file:text-[#57146A] file:border-0 file:rounded-lg file:px-3 file:py-1.5" />
+                          {ttdWakakurCabang && <img src={ttdWakakurCabang} alt="TTD Wakakur Unit" className="h-14 mt-2 border p-0.5 rounded-lg object-contain bg-white" />}
                        </div>
                     </div>
                     <button type="submit" className="w-full bg-[#6A197D] hover:bg-[#57146A] text-white py-3 rounded-xl font-baloo font-bold shadow-md transition-all">

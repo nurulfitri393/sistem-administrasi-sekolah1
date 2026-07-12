@@ -1,6 +1,6 @@
 'use client'
 import { useAksesGuard } from '@/lib/useAksesGuard'
-import { bisaMengeditModul } from '@/lib/aksesPeran'
+import { bisaMengeditModul, getAksesInfo } from '@/lib/aksesPeran'
 import CatatanHanyaLihat from '@/components/CatatanHanyaLihat'
 
 import Sidebar from '@/components/Sidebar'
@@ -94,6 +94,7 @@ interface Penandatangan {
   label: string      // cth "Mudir SMP ABS Bandung" / "Kepala SMP ABS Bandung"
   nama: string
   nuptk: string
+  ttd?: string        // URL gambar tanda tangan (diunggah lewat Identitas Lembaga)
 }
 
 // Sepasang penandatangan untuk kop unit: Kepala Satuan (kiri) + Wakil Kepala Kurikulum (kanan).
@@ -256,12 +257,14 @@ function generatePrintHtml(p: {
   namaLembagaBaris: string // satu baris nama: Lembaga Pusat (jadwal keseluruhan) atau nama unit (jadwal unit)
   tampilkanWakaKurikulum: boolean // false untuk jadwal keseluruhan (hanya Mudir), true untuk jadwal unit
   piketUnitId: string | null // null/'semua' = jadwal keseluruhan (gabungkan piket SEMUA unit); diisi id unit = jadwal unit (hanya piket unit tsb)
+  sematkanTtd?: boolean // true = sematkan gambar tanda tangan digital (kalau sudah diunggah), false = kosongkan (utk ttd basah manual)
 }): string {
   const {
     namaUnitTampil, alamat, logoKiri, logoKanan, semester, tahunAjaran,
     rombelFiltered, allSlots, hariList, daftarJadwal, daftarJadwalTetap, daftarJadwalGiliran,
     daftarGuru, daftarMapel, daftarRombel, daftarKelasGabungan, daftarTingkat,
-    daftarPiket, ttd, penandatangan, keterangan, ketYayasan, namaLembagaBaris, tampilkanWakaKurikulum, piketUnitId
+    daftarPiket, ttd, penandatangan, keterangan, ketYayasan, namaLembagaBaris, tampilkanWakaKurikulum, piketUnitId,
+    sematkanTtd = true,
   } = p
 
   // Ambil daftar guru piket pada satu hari, sesuai cakupan:
@@ -502,18 +505,24 @@ function generatePrintHtml(p: {
   // Aturan (sama di semua dokumen unduhan): Kepala Sekolah/Kepala Satuan
   // ("Mengetahui") SELALU di KIRI. Pihak lain (Waka Kurikulum) di KANAN,
   // dan titimangsa sejajar dengan kolom KANAN itu.
+  const imgTtd = (url?: string) => (url && sematkanTtd)
+    ? `<img src="${url}" style="height:22px;display:block;margin:2px auto;object-fit:contain" />`
+    : `<div style="height:22px"></div>`
+
   const ttdHtml = tampilkanWakaKurikulum ? `
     <div style="width:215px;flex-shrink:0">
       <div style="display:flex;gap:4px">
         <div style="flex:1;text-align:center">
           <p style="font-size:7.5px;margin-bottom:4px">Mengetahui,</p>
-          <p style="font-size:6.8px;margin-bottom:19px;line-height:1.3">${penandatangan.kepala.label || ''}</p>
+          <p style="font-size:6.8px;margin-bottom:2px;line-height:1.3">${penandatangan.kepala.label || ''}</p>
+          ${imgTtd(penandatangan.kepala.ttd)}
           <p style="font-size:6.8px;font-weight:700">${penandatangan.kepala.nama || ''}</p>
           <p style="font-size:6.3px">NUPTK: ${penandatangan.kepala.nuptk || '-'}</p>
         </div>
         <div style="flex:1;text-align:center">
           <p style="font-size:7.5px;margin-bottom:2px;white-space:nowrap">${ttd.tempat || ''}, ${ttd.tanggal || ''}</p>
-          <p style="font-size:6.8px;margin-bottom:26px;line-height:1.3">${penandatangan.wakaKurikulum.label || ''}</p>
+          <p style="font-size:6.8px;margin-bottom:2px;line-height:1.3">${penandatangan.wakaKurikulum.label || ''}</p>
+          ${imgTtd(penandatangan.wakaKurikulum.ttd)}
           <p style="font-size:6.8px;font-weight:700">${penandatangan.wakaKurikulum.nama || ''}</p>
           <p style="font-size:6.3px">NUPTK: ${penandatangan.wakaKurikulum.nuptk || '-'}</p>
         </div>
@@ -521,7 +530,8 @@ function generatePrintHtml(p: {
     </div>` : `
     <div style="width:170px;flex-shrink:0;text-align:center">
       <p style="font-size:7.5px;margin-bottom:2px">${ttd.tempat || ''}, ${ttd.tanggal || ''}</p>
-      <p style="font-size:7.5px;margin-bottom:28px;line-height:1.3">Mengetahui,<br/>${penandatangan.kepala.label || ''}</p>
+      <p style="font-size:7.5px;margin-bottom:2px;line-height:1.3">Mengetahui,<br/>${penandatangan.kepala.label || ''}</p>
+      ${imgTtd(penandatangan.kepala.ttd)}
       <p style="font-size:7.5px;font-weight:700">${penandatangan.kepala.nama || ''}</p>
       ${(penandatangan.kepala.label || '').toLowerCase().includes('mudir') ? '' : `<p style="font-size:7px">NUPTK: ${penandatangan.kepala.nuptk || '-'}</p>`}
     </div>`
@@ -609,6 +619,7 @@ function generatePrintHtmlGuru(p: {
   namaSekolahCetak: string
   allSlots: WaktuSlot[]
   daftarJadwal: any[]
+  daftarJadwalTetap: JadwalTetap[]
   daftarMapel: any[]
   daftarRombel: any[]
   daftarPiket: PiketGuru[]
@@ -616,7 +627,7 @@ function generatePrintHtmlGuru(p: {
   daftarLembaga: any[]
   keterangan: string
 }): string {
-  const { guru, namaSekolahCetak, allSlots, daftarJadwal, daftarMapel, daftarRombel, daftarPiket, daftarGuru, daftarLembaga } = p
+  const { guru, namaSekolahCetak, allSlots, daftarJadwal, daftarJadwalTetap, daftarMapel, daftarRombel, daftarPiket, daftarGuru, daftarLembaga } = p
 
   const mapelDiampu = (guru.mapelIds || [])
     .map((mId: string) => daftarMapel.find((m: any) => m.id === mId))
@@ -653,7 +664,25 @@ function generatePrintHtmlGuru(p: {
 
     const tdCells = LIST_HARI_UNIT.map(hari => {
       const j = daftarJadwal.find((jj: any) => jj.hari === hari && jj.waktuId === slot.id && jj.guruId === guru.id)
-      if (!j) return `<td style="border:1px solid #000;background:#262626;text-align:center"></td>`
+      // Jadwal Berlaku Umum (jenis Mata Pelajaran) yang melibatkan guru ini pada
+      // hari+slot yang sama juga harus ikut tampil di jadwal pribadinya --
+      // sebelumnya cuma daftarJadwal biasa yang dicek, sehingga jadwal jenis
+      // ini "hilang" dari unduhan per-guru walau sudah benar di tabel utama.
+      const jt = !j ? daftarJadwalTetap.find(t => t.jenis === 'mapel' && t.guruId === guru.id && (t.hari === hari || t.hari === 'Semua') && t.waktuId === slot.id) : null
+
+      if (!j && !jt) return `<td style="border:1px solid #000;background:#262626;text-align:center"></td>`
+
+      if (jt) {
+        const mapelTetap = daftarMapel.find((m: any) => m.id === jt.mapelId)
+        const kelasList = jt.berlakuUntuk === 'semua' ? 'Semua Kelas'
+          : jt.berlakuUntuk === 'rombel' ? jt.rombelIds.map(rid => daftarRombel.find((r: any) => r.id === rid)?.nama).filter(Boolean).join(', ')
+          : (daftarLembaga.find((l: any) => l.id === jt.lembagaIds?.[0])?.nama || 'Unit')
+        return `<td style="border:1px solid #000;text-align:center;vertical-align:middle;background:#d1fae5">
+          <span style="font-size:16px;font-weight:900;display:block;line-height:1.25;color:#000;text-align:center;white-space:normal;word-break:break-word">${mapelTetap?.kode || mapelTetap?.nama || jt.nama || '-'}</span>
+          <span style="font-size:13px;font-weight:600;display:block;line-height:1.25;margin-top:1px;white-space:normal;word-break:break-word;color:#065f46;text-align:center">${kelasList}</span>
+        </td>`
+      }
+
       const rombel = daftarRombel.find((r: any) => r.id === j.rombelId)
       const mapel = daftarMapel.find((m: any) => m.id === j.mapelId)
       return `<td style="border:1px solid #000;text-align:center;vertical-align:middle;background:#eef2ff">
@@ -778,6 +807,31 @@ export default function JadwalPelajaranPage() {
   const [daftarJadwalGiliran, setDaftarJadwalGiliran] = useState<JadwalGiliran[]>([])
   const [daftarLarangan, setDaftarLarangan] = useState<LaranganBeriringan[]>([])
   const [generateScope, setGenerateScope] = useState<string>('semua')
+
+  // Batasi CAKUPAN GENERATE sesuai unit yang dikelola akun yang sedang login.
+  // Admin BENERAN (login langsung via Supabase Auth, bukan akun Guru) tetap
+  // bisa generate SEMUA unit. Akun Guru (termasuk yang diberi peran "Admin
+  // SMP"/"Kurikulum SMP" dsb) HANYA boleh generate unit yang dia kelola
+  // sendiri (sesuai unitIds di data guru tsb) -- unit lain harus terkunci.
+  const unitScopeGenerate = (() => {
+    const info = getAksesInfo()
+    if (!info.isGuru) return null // admin beneran -> tidak dibatasi
+    const guruData = daftarGuru.find((g: any) => g.id === info.guruId)
+    const unitIds: string[] = guruData?.unitIds || []
+    return unitIds.filter((uid: string) => uid !== 'lembaga-induk') // "lembaga-induk" bukan unit spesifik
+  })()
+  const lembagaGenerateBolehDipilih = unitScopeGenerate
+    ? daftarLembaga.filter(l => unitScopeGenerate.includes(l.id))
+    : daftarLembaga
+
+  // Kalau akun ini dibatasi ke unit tertentu, pastikan generateScope tidak
+  // pernah tersangkut di "semua" (seluruh lembaga) atau unit di luar skopnya.
+  useEffect(() => {
+    if (!unitScopeGenerate) return
+    if (generateScope === 'semua' || !unitScopeGenerate.includes(generateScope)) {
+      setGenerateScope(unitScopeGenerate[0] || '')
+    }
+  }, [unitScopeGenerate?.join(',')])
   const [isGenerating, setIsGenerating] = useState(false)
   const [generateProgress, setGenerateProgress] = useState('')
   const generateCancelRef = useRef(false)
@@ -886,6 +940,7 @@ export default function JadwalPelajaranPage() {
   // Download modal
   const [showDownloadModal, setShowDownloadModal] = useState(false)
   const [downloadTarget, setDownloadTarget] = useState<string>('semua')
+  const [sematkanTtdJadwal, setSematkanTtdJadwal] = useState(true)
 
   // Modal & state untuk unduhan jadwal PER-GURU (satu-satu atau ZIP semua)
   const [showDownloadGuruModal, setShowDownloadGuruModal] = useState(false)
@@ -927,6 +982,7 @@ export default function JadwalPelajaranPage() {
       load('master_peran', setDaftarPeran)
 
       load('data_jadwal_pelajaran', setDaftarJadwal)
+      cekUndoTersedia()
 
       // Bersihkan sisa data jadwal hari SABTU yang mungkin sudah terlanjur
       // tersimpan dari sebelum Sabtu dihapus dari daftar hari pelajaran --
@@ -1445,7 +1501,8 @@ export default function JadwalPelajaranPage() {
     return {
       label: `Mudir ${identitasInduk.nama || ''}`.trim(),
       nama: mudir ? mudir.nama : '(Mudir belum ditugaskan di Kelola Data Guru)',
-      nuptk: mudir?.nuptk || mudir?.nip || '-'
+      nuptk: mudir?.nuptk || mudir?.nip || '-',
+      ttd: identitasInduk.ttdKepala || '',
     }
   }
 
@@ -1463,7 +1520,8 @@ export default function JadwalPelajaranPage() {
     return {
       label: `Kepala ${namaUnit}`,
       nama: kepsek ? kepsek.nama : '(Kepala Sekolah belum ditugaskan di Kelola Data Guru)',
-      nuptk: kepsek?.nuptk || kepsek?.nip || '-'
+      nuptk: kepsek?.nuptk || kepsek?.nip || '-',
+      ttd: unit?.ttdKepala || '',
     }
   }
 
@@ -1484,7 +1542,8 @@ export default function JadwalPelajaranPage() {
     return {
       label: `Wakakur ${namaUnit}`,
       nama: waka ? waka.nama : '(Waka Kurikulum belum ditugaskan di Kelola Data Guru)',
-      nuptk: waka?.nuptk || waka?.nip || '-'
+      nuptk: waka?.nuptk || waka?.nip || '-',
+      ttd: (unitId === 'semua' || unitId === 'lembaga-induk') ? (identitasInduk.ttdWakakur || '') : (unit?.ttdWakakur || ''),
     }
   }
 
@@ -1518,6 +1577,16 @@ export default function JadwalPelajaranPage() {
       if (j.guruId !== guruId || j.hari !== hari || j.id === kecuali) return
       const sw = daftarWaktu.find(w => w.id === j.waktuId)
       if (sw && sw.jenis === 'mapel') s.add(j.waktuId)
+    })
+    // Jadwal Berlaku Umum (jenis Mata Pelajaran) yang melibatkan guru ini
+    // pada hari yang sama juga ikut dihitung, supaya rekap per hari selalu
+    // konsisten dengan Total JP (yang sudah menghitungnya sejak awal).
+    daftarJadwalTetap.forEach(jt => {
+      if (jt.jenis !== 'mapel' || jt.guruId !== guruId || jt.id === kecuali) return
+      const hariOk = jt.hari === hari || jt.hari === 'Semua'
+      if (!hariOk) return
+      const sw = daftarWaktu.find(w => w.id === jt.waktuId)
+      if (sw && sw.jenis === 'mapel') s.add(jt.waktuId)
     })
     return s.size
   }
@@ -1729,7 +1798,51 @@ export default function JadwalPelajaranPage() {
   // ============================================================
   // GENERATE OTOMATIS — Window-paired 3JP + async multi-attempt
   // ============================================================
+  // ── UNDO satu langkah terakhir ───────────────────────────────────────────
+  // Sebelum tindakan yang MENGHAPUS/MENIMPA jadwal secara besar-besaran
+  // (Hapus Hasil Generate, Generate Otomatis), simpan dulu kondisi jadwal
+  // SEBELUM tindakan itu ke localStorage (bukan lewat cloud sync, cukup
+  // lokal saja, karena ini cuma jaring pengaman sesaat) -- supaya kalau
+  // ternyata hasilnya tidak sesuai harapan, bisa dikembalikan satu langkah.
+  const simpanSnapshotUndo = (deskripsi: string) => {
+    try {
+      localStorage.setItem(kunciTahun('_undo_jadwal_snapshot'), JSON.stringify({
+        data: daftarJadwal, waktu: Date.now(), deskripsi,
+      }))
+    } catch (e) { console.warn('Gagal menyimpan snapshot undo:', e) }
+  }
+
+  const [undoTersedia, setUndoTersedia] = useState<{ deskripsi: string; waktu: number } | null>(null)
+
+  const cekUndoTersedia = () => {
+    try {
+      const s = localStorage.getItem(kunciTahun('_undo_jadwal_snapshot'))
+      if (s) { const parsed = JSON.parse(s); setUndoTersedia({ deskripsi: parsed.deskripsi, waktu: parsed.waktu }) }
+      else setUndoTersedia(null)
+    } catch { setUndoTersedia(null) }
+  }
+
+  const handleUndoJadwal = () => {
+    try {
+      const s = localStorage.getItem(kunciTahun('_undo_jadwal_snapshot'))
+      if (!s) { alert('Tidak ada tindakan untuk dibatalkan.'); return }
+      const parsed = JSON.parse(s)
+      if (!confirm(`Kembalikan jadwal ke kondisi SEBELUM "${parsed.deskripsi}"? Jadwal yang ada SEKARANG akan diganti dengan kondisi sebelumnya.`)) return
+      setDaftarJadwal(parsed.data)
+      save('data_jadwal_pelajaran', parsed.data)
+      localStorage.removeItem(kunciTahun('_undo_jadwal_snapshot'))
+      setUndoTersedia(null)
+      alert('Berhasil dikembalikan ke kondisi sebelumnya.')
+    } catch (e) {
+      alert('Gagal undo: ' + String(e))
+    }
+  }
+
   const handleHapusHasilGenerate = () => {
+    if (unitScopeGenerate && (generateScope === 'semua' || !unitScopeGenerate.includes(generateScope))) {
+      alert('Akun Anda tidak berwenang untuk cakupan ini. Hanya bisa menghapus/generate jadwal untuk unit yang Anda kelola.')
+      return
+    }
     const rombelTarget: string[] = generateScope === 'semua'
       ? daftarRombel.map(r => r.id)
       : getRombelsByLembaga(generateScope).map((r: any) => r.id)
@@ -1740,16 +1853,22 @@ export default function JadwalPelajaranPage() {
       : (daftarLembaga.find(l => l.id === generateScope)?.nama || 'unit terpilih')
     const jumlahTerdampak = daftarJadwal.filter(j => rombelTargetSet.has(j.rombelId)).length
     if (!jumlahTerdampak) { alert(`Tidak ada jadwal untuk cakupan "${namaCakupan}" yang perlu dihapus.`); return }
-    if (!confirm(`Hapus SELURUH jadwal (${jumlahTerdampak} slot) untuk cakupan: ${namaCakupan}?\nTindakan ini tidak bisa dibatalkan -- jadwal unit/kelas lain di luar cakupan ini tidak terpengaruh.`)) return
+    if (!confirm(`Hapus SELURUH jadwal (${jumlahTerdampak} slot) untuk cakupan: ${namaCakupan}?\nBisa di-undo satu kali kalau ternyata salah.`)) return
 
+    simpanSnapshotUndo(`Hapus Hasil Generate (${namaCakupan})`)
     const sisa = daftarJadwal.filter(j => !rombelTargetSet.has(j.rombelId))
     setDaftarJadwal(sisa)
     save('data_jadwal_pelajaran', sisa)
-    alert(`Berhasil menghapus ${jumlahTerdampak} slot jadwal untuk cakupan "${namaCakupan}".`)
+    setUndoTersedia({ deskripsi: `Hapus Hasil Generate (${namaCakupan})`, waktu: Date.now() })
+    alert(`Berhasil menghapus ${jumlahTerdampak} slot jadwal untuk cakupan "${namaCakupan}". (Bisa di-undo lewat tombol "Undo Terakhir" kalau perlu.)`)
   }
 
   const handleGenerate = () => {
     if (isGenerating) { generateCancelRef.current = true; return }
+    if (unitScopeGenerate && (generateScope === 'semua' || !unitScopeGenerate.includes(generateScope))) {
+      alert('Akun Anda tidak berwenang untuk cakupan ini. Hanya bisa men-generate jadwal untuk unit yang Anda kelola.')
+      return
+    }
     const matriksRows = getMatriksRows()
     if (!matriksRows.length) { alert('Belum ada data guru/matriks.'); return }
 
@@ -2171,7 +2290,9 @@ export default function JadwalPelajaranPage() {
         })
       })
 
+      simpanSnapshotUndo(`Generate Jadwal Otomatis (percobaan ke-${attempt})`)
       setDaftarJadwal(arrFinal); save('data_jadwal_pelajaran', arrFinal)
+      setUndoTersedia({ deskripsi: `Generate Jadwal Otomatis (percobaan ke-${attempt})`, waktu: Date.now() })
       setIsGenerating(false); setGenerateProgress('')
       const bg: string[]=[]
       if (gabunganTerapkanUlang.length) bg.push(`🟢 KELAS GABUNGAN disalin otomatis (${gabunganTerapkanUlang.length} slot):\\n${gabunganTerapkanUlang.join('\\n')}`)
@@ -2350,11 +2471,19 @@ export default function JadwalPelajaranPage() {
    *  biasa MAUPUN Jadwal Berlaku Umum jenis Mata Pelajaran). */
   const cekKelengkapanJpGuru = (guruId: string): { lengkap: boolean; kekurangan: { mapel: string; kelas: string; butuh: number; ada: number }[] } => {
     const butuhMap = new Map<string, number>() // key: mapelId_rombelId
-    Object.keys(matriksRinciJp).forEach(k => {
-      const [gId, mId, rId] = k.split('_')
-      if (gId !== guruId) return
-      const jp = hitungJpStr(matriksRinciJp[k])
-      if (jp > 0) butuhMap.set(`${mId}_${rId}`, (butuhMap.get(`${mId}_${rId}`) || 0) + jp)
+    // PENTING: hanya hitung kombinasi yang MASIH BENAR-BENAR VALID sesuai
+    // Pembagian Peran saat ini (matriksRows) -- localStorage matriksRinciJp
+    // bisa saja masih menyimpan data LAMA untuk kombinasi guru+mapel+kelas
+    // yang sudah tidak lagi ditugaskan (mis. guru dipindah dari Kelas 2A/2B
+    // ke kelas lain), dan data lama itu TIDAK otomatis terhapus. Kalau tidak
+    // difilter di sini, status kelengkapan akan salah terus-menerus
+    // menyebut kekurangan JP di kelas yang sudah tidak diampu lagi.
+    matriksRows.forEach(({ guru, mapel, rombelRelevant }) => {
+      if (guru.id !== guruId) return
+      rombelRelevant.forEach((rId: string) => {
+        const jp = hitungJpStr(matriksRinciJp[`${guru.id}_${mapel.id}_${rId}`] || '')
+        if (jp > 0) butuhMap.set(`${mapel.id}_${rId}`, (butuhMap.get(`${mapel.id}_${rId}`) || 0) + jp)
+      })
     })
 
     const adaMap = new Map<string, number>()
@@ -2509,10 +2638,11 @@ export default function JadwalPelajaranPage() {
       daftarJadwal, daftarJadwalTetap, daftarJadwalGiliran,
       daftarGuru, daftarMapel, daftarRombel, daftarKelasGabungan, daftarTingkat,
       daftarPiket, ttd, penandatangan, keterangan: keteranganTerpilih,
-      ketYayasan: identitasInduk.kop || 'MAJLIS PENDIDIKAN DASAR DAN MENENGAH',
+      ketYayasan: identitasInduk.kop || 'MAJLIS PENDIDIKAN DASAR DAN MENENGAH\nPIMPINAN WILAYAH AISYIYAH JAWA BARAT',
       namaLembagaBaris,
       tampilkanWakaKurikulum: downloadTarget !== 'semua',
-      piketUnitId: downloadTarget === 'semua' ? null : downloadTarget
+      piketUnitId: downloadTarget === 'semua' ? null : downloadTarget,
+      sematkanTtd: sematkanTtdJadwal,
     })
     const win = window.open('', '_blank')
     if (win) { win.document.write(html); win.document.close(); setTimeout(() => win.print(), 500) }
@@ -2611,7 +2741,11 @@ export default function JadwalPelajaranPage() {
     // Deteksi unit mana saja yang BENAR-BENAR diajar guru ini (berdasarkan rombel yang ada di jadwalnya),
     // bukan hanya dari unitIds pendaftaran. Ini memastikan guru lintas lembaga tetap menampilkan
     // semua jadwal meskipun unit kerjanya terdaftar hanya di satu unit.
-    const rombelDiajar = [...new Set(daftarJadwal.filter((j: any) => j.guruId === guru.id).map((j: any) => j.rombelId))]
+    const rombelDiajarBiasa = daftarJadwal.filter((j: any) => j.guruId === guru.id).map((j: any) => j.rombelId)
+    const rombelDiajarBerlakuUmum = daftarJadwalTetap
+      .filter((jt: any) => jt.jenis === 'mapel' && jt.guruId === guru.id && jt.berlakuUntuk === 'rombel')
+      .flatMap((jt: any) => jt.rombelIds || [])
+    const rombelDiajar = [...new Set([...rombelDiajarBiasa, ...rombelDiajarBerlakuUmum])]
     const unitDiajarIds = [...new Set(rombelDiajar.map(rId => getRombelLembagaId(rId)).filter(Boolean))]
 
     // Gabungkan dengan unitIds pendaftaran agar nama unit kerja utama juga ikut tampil
@@ -2635,7 +2769,7 @@ export default function JadwalPelajaranPage() {
 
     return generatePrintHtmlGuru({
       guru, namaUnitTampil, namaSekolahCetak: namaInduk, allSlots: allSlotsUrutLokal,
-      daftarJadwal, daftarMapel, daftarRombel, daftarPiket, daftarGuru, daftarLembaga,
+      daftarJadwal, daftarJadwalTetap, daftarMapel, daftarRombel, daftarPiket, daftarGuru, daftarLembaga,
       keterangan: keteranganTerpilih
     })
   }
@@ -3144,7 +3278,7 @@ export default function JadwalPelajaranPage() {
                     <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Jenis</label>
                     <div className="grid grid-cols-2 gap-2">
                       <button type="button" onClick={() => setFormTetapJenis('kegiatan')} className={`py-2 rounded-xl text-xs font-bold border transition ${formTetapJenis === 'kegiatan' ? 'bg-sky-600 border-sky-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>Nama Kegiatan</button>
-                      <button type="button" onClick={() => setFormTetapJenis('mapel')} className={`py-2 rounded-xl text-xs font-bold border transition ${formTetapJenis === 'mapel' ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>Mata Pelajaran</button>
+                      <button type="button" onClick={() => { setFormTetapJenis('mapel'); if (formTetapHari === 'Semua') setFormTetapHari('Senin') }} className={`py-2 rounded-xl text-xs font-bold border transition ${formTetapJenis === 'mapel' ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>Mata Pelajaran</button>
                     </div>
                   </div>
 
@@ -3156,17 +3290,23 @@ export default function JadwalPelajaranPage() {
                   ) : (
                     <>
                       <div>
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Mata Pelajaran</label>
-                        <select value={formTetapMapelId} onChange={e => setFormTetapMapelId(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
-                          <option value="">-- Pilih Mapel --</option>
-                          {daftarMapel.map((m: any) => <option key={m.id} value={m.id}>{m.nama}</option>)}
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Pendidik</label>
+                        <select value={formTetapGuruId} onChange={e => { setFormTetapGuruId(e.target.value); setFormTetapMapelId(''); setFormTetapJumlahJp(null) }} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+                          <option value="">-- Pilih Guru --</option>
+                          {daftarGuru.map((g: any) => <option key={g.id} value={g.id}>{g.nama}</option>)}
                         </select>
                       </div>
                       <div>
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Pendidik</label>
-                        <select value={formTetapGuruId} onChange={e => setFormTetapGuruId(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
-                          <option value="">-- Pilih Guru --</option>
-                          {daftarGuru.map((g: any) => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Mata Pelajaran</label>
+                        <select value={formTetapMapelId} onChange={e => { setFormTetapMapelId(e.target.value); setFormTetapJumlahJp(null) }} disabled={!formTetapGuruId} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-emerald-500 bg-white disabled:bg-slate-50 disabled:text-slate-400">
+                          <option value="">{formTetapGuruId ? '-- Pilih Mapel --' : '-- Pilih Pendidik dulu --'}</option>
+                          {(() => {
+                            // Hanya tampilkan mapel yang BENAR-BENAR diampu guru
+                            // terpilih (sesuai Pembagian Peran/Matriks Alokasi),
+                            // bukan semua mapel yang ada di sekolah.
+                            const mapelIdSet = new Set(matriksRows.filter(({ guru }) => guru.id === formTetapGuruId).map(({ mapel }) => mapel.id))
+                            return daftarMapel.filter((m: any) => mapelIdSet.has(m.id)).map((m: any) => <option key={m.id} value={m.id}>{m.nama}</option>)
+                          })()}
                         </select>
                       </div>
                       <p className="text-[9px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">Untuk kelas gabungan: pilih "Berlaku Untuk" = Kelas Tertentu di bawah, lalu centang minimal 2 kelas yang digabung.</p>
@@ -3197,17 +3337,34 @@ export default function JadwalPelajaranPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Hari</label>
-                      <select value={formTetapHari} onChange={e => setFormTetapHari(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-sky-500 bg-white">
-                        <option value="Semua">Semua Hari</option>
-                        {LIST_HARI.map(h => <option key={h} value={h}>{h}</option>)}
+                      <select value={formTetapHari} onChange={e => { setFormTetapHari(e.target.value); setFormTetapWaktuId('') }} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-sky-500 bg-white">
+                        {formTetapJenis === 'kegiatan' && <option value="Semua">Semua Hari</option>}
+                        {LIST_HARI.map(h => {
+                          if (formTetapJenis === 'mapel' && formTetapGuruId) {
+                            const reqStr = requestHariJp[`${formTetapGuruId}_${h}`] || ''
+                            if (reqStr.trim() === '-') return null // guru ini sama sekali tidak bisa di hari ini
+                          }
+                          return <option key={h} value={h}>{h}</option>
+                        })}
                       </select>
                     </div>
                     <div>
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Slot Waktu</label>
                       <select value={formTetapWaktuId} onChange={e => setFormTetapWaktuId(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-sky-500 bg-white" required>
                         <option value="">-- Pilih Slot --</option>
-                        {daftarWaktu.map(w => <option key={w.id} value={w.id}>{w.label} ({w.mulai}–{w.selesai})</option>)}
+                        {daftarWaktu.filter(w => {
+                          // Untuk jenis Mata Pelajaran, hanya tampilkan slot yang
+                          // SESUAI Request Ketersediaan Hari guru terpilih pada
+                          // hari yang sedang dipilih -- supaya jadwal berlaku umum
+                          // tidak bisa dibuat di jam yang memang tidak bisa diisi guru itu.
+                          if (formTetapJenis !== 'mapel' || !formTetapGuruId || formTetapHari === 'Semua') return true
+                          const reqStr = requestHariJp[`${formTetapGuruId}_${formTetapHari}`] || ''
+                          return blokSesuaiKetersediaan(reqStr, [Number(w.jamKe)])
+                        }).map(w => <option key={w.id} value={w.id}>{w.label} ({w.mulai}–{w.selesai})</option>)}
                       </select>
+                      {formTetapJenis === 'mapel' && formTetapGuruId && formTetapHari !== 'Semua' && (requestHariJp[`${formTetapGuruId}_${formTetapHari}`] || '').trim() && (
+                        <p className="text-[9px] text-slate-400 mt-1">Sesuai Request Ketersediaan: {requestHariJp[`${formTetapGuruId}_${formTetapHari}`]}</p>
+                      )}
                     </div>
                   </div>
 
@@ -3647,7 +3804,6 @@ export default function JadwalPelajaranPage() {
                     <tr className="bg-amber-50 border-b border-amber-200 text-amber-800 font-black tracking-wider">
                       <th className="p-4 min-w-[160px] sticky left-0 z-20 bg-amber-50 border-r border-amber-200">Pendidik</th>
                       {LIST_HARI.map(h => <th key={h} className="p-4 text-center min-w-[110px] border-l border-amber-100 text-[10px]">{h}</th>)}
-                      <th className="p-4 text-center min-w-[90px] border-l border-amber-200 text-[10px] bg-amber-100">Total JP</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-amber-100">
@@ -3662,25 +3818,10 @@ export default function JadwalPelajaranPage() {
                             </td>
                           )
                         })}
-                        <td className="p-2 text-center border-l border-amber-200 bg-amber-50/40 font-black text-amber-800">{rekapJamGuru()[g.id] || 0} JP</td>
                       </tr>
                     ))}
                     {!daftarGuru.length && <tr><td colSpan={7} className="py-8 text-center text-slate-400 text-xs">Belum ada data guru.</td></tr>}
                   </tbody>
-                  {daftarGuru.length > 0 && (
-                    <tfoot>
-                      <tr className="bg-amber-100 border-t-2 border-amber-300 font-black text-amber-900">
-                        <td className="p-4 sticky left-0 z-10 bg-amber-100 border-r border-amber-200">Total JP / Hari</td>
-                        {LIST_HARI.map(h => {
-                          const totalHari = daftarGuru.reduce((sum, g) => sum + hitungJpGuruHari(g.id, h), 0)
-                          return <td key={h} className="p-4 text-center border-l border-amber-200">{totalHari} JP</td>
-                        })}
-                        <td className="p-4 text-center border-l border-amber-300 bg-amber-200">
-                          {daftarGuru.reduce((sum, g) => sum + (rekapJamGuru()[g.id] || 0), 0)} JP
-                        </td>
-                      </tr>
-                    </tfoot>
-                  )}
                 </table>
               </div>
               <div className="flex flex-wrap items-end gap-4 pt-2">
@@ -3689,16 +3830,20 @@ export default function JadwalPelajaranPage() {
                   <select
                     value={generateScope}
                     onChange={e => setGenerateScope(e.target.value)}
-                    className="px-4 py-2.5 border border-[#E3C2ED] rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white min-w-[220px]"
+                    disabled={!!unitScopeGenerate && lembagaGenerateBolehDipilih.length <= 1}
+                    className="px-4 py-2.5 border border-[#E3C2ED] rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white min-w-[220px] disabled:bg-slate-50 disabled:text-slate-500"
                   >
-                    <option value="semua">Seluruh Lembaga (semua unit)</option>
-                    {daftarLembaga.map(l => <option key={l.id} value={l.id}>Unit: {l.nama} saja</option>)}
+                    {!unitScopeGenerate && <option value="semua">Seluruh Lembaga (semua unit)</option>}
+                    {lembagaGenerateBolehDipilih.map(l => <option key={l.id} value={l.id}>Unit: {l.nama} saja</option>)}
                   </select>
                   <p className="text-[9px] text-slate-400 max-w-xs">
                     {generateScope === 'semua'
                       ? 'Semua jadwal akan di-generate ulang dari awal.'
                       : `Hanya jadwal unit "${daftarLembaga.find(l => l.id === generateScope)?.nama}" yang akan di-generate ulang. Jadwal unit lain dipertahankan.`}
                   </p>
+                  {unitScopeGenerate && (
+                    <p className="text-[9px] text-amber-600 font-semibold max-w-xs">🔒 Akun Anda hanya berwenang men-generate jadwal untuk unit yang Anda kelola.</p>
+                  )}
                 </div>
                 <div className="flex flex-col gap-2 h-fit">
                   <div className="flex gap-2">
@@ -3710,7 +3855,15 @@ export default function JadwalPelajaranPage() {
                       className="flex items-center gap-2 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-5 py-3 rounded-xl font-extrabold text-xs shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed">
                       <Trash2 className="w-4 h-4" /> Hapus Hasil Generate
                     </button>
+                    {undoTersedia && (
+                      <button onClick={handleUndoJadwal} disabled={isGenerating}
+                        className="flex items-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 px-5 py-3 rounded-xl font-extrabold text-xs shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed"
+                        title={`Kembalikan ke kondisi sebelum: ${undoTersedia.deskripsi}`}>
+                        <RotateCcw className="w-4 h-4" /> Undo Terakhir
+                      </button>
+                    )}
                   </div>
+                  {undoTersedia && <p className="text-[9px] text-amber-600 max-w-xs">Bisa dikembalikan ke sebelum: "{undoTersedia.deskripsi}"</p>}
                   {generateProgress && <p className="text-[10px] text-[#6A197D] font-semibold animate-pulse max-w-xs">{generateProgress}</p>}
                 </div>
               </div>
@@ -4271,6 +4424,11 @@ export default function JadwalPelajaranPage() {
               <p><strong>Semester:</strong> {semesterAktif} <span className="text-slate-400">(diatur di Pengaturan Kelas)</span></p>
               <p><strong>Tahun Ajaran:</strong> {tahunAjaranAktif} <span className="text-slate-400">(diatur di Dashboard)</span></p>
             </div>
+
+            <label className="flex items-center gap-2.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 cursor-pointer">
+              <input type="checkbox" checked={sematkanTtdJadwal} onChange={e => setSematkanTtdJadwal(e.target.checked)} className="w-4 h-4 accent-emerald-600" />
+              <span className="text-xs font-semibold text-slate-700">Sematkan tanda tangan digital (kalau sudah diunggah di Identitas Lembaga)</span>
+            </label>
 
             <div className="flex gap-3 pt-2">
               <button onClick={handleDownload} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-md transition">

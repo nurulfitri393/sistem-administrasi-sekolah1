@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
 import { kunciTahun } from '@/lib/tahunAjaran'
+import { muatGambarBase64 } from '@/lib/muatGambarBase64'
 import { useGoogleLogin } from '@react-oauth/google'
 import {
   CalendarDays, Home, ArrowLeft, Calendar, Plus, Trash2, RefreshCw,
@@ -37,6 +38,11 @@ interface ProfilCetak {
   namaKepala: string
   nipKepala: string
   titiMangsa: string
+  ttdMudir: string
+  ttdKepala: string
+  namaWaka: string
+  nipWaka: string
+  ttdWaka: string
 }
 
 interface UnitIdentitas {
@@ -46,6 +52,10 @@ interface UnitIdentitas {
   alamat?: string
   namaKepala?: string
   nipKepala?: string
+  ttdKepala?: string
+  namaWakakur?: string
+  nipWakakur?: string
+  ttdWakakur?: string
 }
 
 interface IdentitasLembagaData {
@@ -55,6 +65,10 @@ interface IdentitasLembagaData {
   kota?: string
   namaMudir?: string
   nipMudir?: string
+  ttdMudir?: string
+  namaWakakurPusat?: string
+  nipWakakurPusat?: string
+  ttdWakakurPusat?: string
   unitList?: UnitIdentitas[]
 }
 
@@ -108,20 +122,27 @@ function ambilIdentitasLembaga(): IdentitasLembagaData|null {
     if (!rawInduk && !rawLembaga) return null
 
     const induk = rawInduk ? JSON.parse(rawInduk) : {}
-    const daftarLembaga: {id:string;nama?:string;npsn?:string}[] = rawLembaga ? JSON.parse(rawLembaga) : []
+    const daftarLembaga: {id:string;nama?:string;npsn?:string;ttdKepala?:string;ttdWakakur?:string}[] = rawLembaga ? JSON.parse(rawLembaga) : []
     const daftarGuru: GuruRingkas[] = rawGuru ? JSON.parse(rawGuru) : []
     const daftarPeran: PeranRingkas[] = rawPeran ? JSON.parse(rawPeran) : []
 
     const peranMudirId = cariPeranId(daftarPeran, ['mudir', 'pimpinan yayasan'])
     const peranKepsekId = cariPeranId(daftarPeran, ['kepala sekolah', 'pimpinan unit'])
+    const peranWakaId = cariPeranId(daftarPeran, ['waka kurikulum', 'wakil kepala kurikulum', 'kurikulum'])
 
     const mudir = peranMudirId
       ? daftarGuru.find(g => g.unitIds?.includes('lembaga-induk') && g.peranIds?.includes(peranMudirId))
+      : undefined
+    const wakaPusat = peranWakaId
+      ? daftarGuru.find(g => g.unitIds?.includes('lembaga-induk') && g.peranIds?.includes(peranWakaId))
       : undefined
 
     const unitList: UnitIdentitas[] = daftarLembaga.map(u => {
       const kepsek = peranKepsekId
         ? daftarGuru.find(g => g.unitIds?.includes(u.id) && g.peranIds?.includes(peranKepsekId))
+        : undefined
+      const waka = peranWakaId
+        ? daftarGuru.find(g => g.unitIds?.includes(u.id) && g.peranIds?.includes(peranWakaId))
         : undefined
       return {
         id: u.id,
@@ -129,6 +150,10 @@ function ambilIdentitasLembaga(): IdentitasLembagaData|null {
         npsn: u.npsn,
         namaKepala: kepsek?.nama,
         nipKepala: kepsek ? ambilNipGuru(kepsek) : undefined,
+        ttdKepala: u.ttdKepala,
+        namaWakakur: waka?.nama,
+        nipWakakur: waka ? ambilNipGuru(waka) : undefined,
+        ttdWakakur: u.ttdWakakur,
       }
     })
 
@@ -137,6 +162,10 @@ function ambilIdentitasLembaga(): IdentitasLembagaData|null {
       npsn: induk.npsn,
       namaMudir: mudir?.nama,
       nipMudir: mudir ? ambilNipGuru(mudir) : undefined,
+      ttdMudir: induk.ttdKepala,
+      namaWakakurPusat: wakaPusat?.nama,
+      nipWakakurPusat: wakaPusat ? ambilNipGuru(wakaPusat) : undefined,
+      ttdWakakurPusat: induk.ttdWakakur,
       unitList,
     }
   } catch { return null }
@@ -244,6 +273,12 @@ interface ParamsPDF {
   namaPenandatangan: string
   jabatanPenandatangan: string
   nipPenandatangan: string
+  ttdPenandatangan: string
+  sematkanTtd: boolean
+  namaWaka: string
+  nipWaka: string
+  ttdWaka: string
+  wakaLabel: string
   titiMangsa: string
   tahunAjaran: string
   filterSemester: 'semua'|'semester1'|'semester2'
@@ -254,7 +289,8 @@ interface ParamsPDF {
 
 async function buatDokumenPDF(params: ParamsPDF) {
   const {default:jsPDF}=await import('jspdf')
-  const {namaInstitusi,namaPenandatangan,jabatanPenandatangan,nipPenandatangan,
+  const {namaInstitusi,namaPenandatangan,jabatanPenandatangan,nipPenandatangan,ttdPenandatangan,sematkanTtd,
+    namaWaka,nipWaka,ttdWaka,wakaLabel,
     titiMangsa,tahunAjaran,filterSemester,scope,unitId,
     daftarAgenda,daftarKlasifikasiAgenda,bulanAkademik}=params
 
@@ -283,14 +319,17 @@ async function buatDokumenPDF(params: ParamsPDF) {
 
   function drawKop(y0:number):number {
     let y=y0
-    doc.setLineWidth(1.1);doc.setDrawColor(0,0,0);doc.line(ML,y,PW-MR,y);y+=2
-    doc.setFont('times','bold');doc.setFontSize(13);doc.setTextColor(...DARK)
-    doc.text('KALENDER PENDIDIKAN',PW/2,y+4.5,{align:'center'})
+    doc.setLineWidth(1.1);doc.setDrawColor(0,0,0);doc.line(ML,y,PW-MR,y);y+=4
+    doc.setFont('times','bold');doc.setFontSize(9.5);doc.setTextColor(...DARK)
+    doc.text('MAJLIS PENDIDIKAN DASAR DAN MENENGAH',PW/2,y,{align:'center'});y+=4
+    doc.text('PIMPINAN WILAYAH AISYIYAH JAWA BARAT',PW/2,y,{align:'center'});y+=5.5
+    doc.setFontSize(13)
+    doc.text('KALENDER PENDIDIKAN',PW/2,y,{align:'center'});y+=5.5
     doc.setFontSize(10.5)
-    doc.text(namaInstitusi.toUpperCase(),PW/2,y+10,{align:'center'})
+    doc.text(namaInstitusi.toUpperCase(),PW/2,y,{align:'center'})
     doc.setFont('times','normal');doc.setFontSize(8);doc.setTextColor(...DARK)
-    doc.text(`TAHUN AJARAN ${tahunAjaran}`,PW/2,y+15.5,{align:'center'})
-    y+=19
+    doc.text(`TAHUN AJARAN ${tahunAjaran}`,PW/2,y+5.5,{align:'center'})
+    y+=9.5
     doc.setLineWidth(0.6);doc.setDrawColor(0,0,0);doc.line(ML,y,PW-MR,y)
     return y+4
   }
@@ -459,14 +498,34 @@ async function buatDokumenPDF(params: ParamsPDF) {
     doc.text(`Kalender Pendidikan \u2014 ${namaInstitusi} \u2014 Tahun Ajaran ${tahunAjaran}`,PW/2,PH-3,{align:'center'})
   }
 
-  function drawSignature(yTop:number) {
-    const ttX=PW-MR-75; let sy=yTop+7
+  async function drawSignature(yTop:number) {
+    const kolKiriX=ML+20; const kolKananX=PW-MR-75
+    let sy=yTop+7
     doc.setFont('times','normal');doc.setFontSize(9);doc.setTextColor(...DARK)
-    doc.text(titiMangsa||titiMangsaHariIni('Bandung'),ttX,sy);sy+=5.5
-    doc.text(scope==='keseluruhan'?`Mudir ${namaInstitusi}`:`${jabatanPenandatangan}`,ttX,sy);sy+=21
+    // Baris 1: titimangsa (cuma di kolom KANAN, sejajar dengan label Wakakur)
+    doc.text(titiMangsa||titiMangsaHariIni('Bandung'),kolKananX,sy)
+    doc.text('Mengetahui,',kolKiriX,sy)
+    sy+=5.5
+    // Baris 2: label jabatan -- SEJAJAR persis di kedua kolom
+    doc.text(scope==='keseluruhan'?`Mudir ${namaInstitusi}`:`${jabatanPenandatangan}`,kolKiriX,sy)
+    doc.text(wakaLabel,kolKananX,sy)
+    const syLabel=sy
+    // Baris 3: gambar tanda tangan (kalau ada & toggle aktif) -- SEJAJAR
+    if(ttdPenandatangan && sematkanTtd){
+      try{ const b=await muatGambarBase64(ttdPenandatangan); if(b) doc.addImage(b,'PNG',kolKiriX,syLabel+2,30,24) }catch{}
+    }
+    if(ttdWaka && sematkanTtd){
+      try{ const b=await muatGambarBase64(ttdWaka); if(b) doc.addImage(b,'PNG',kolKananX,syLabel+2,30,24) }catch{}
+    }
+    sy=syLabel+21
+    // Baris 4: nama -- SEJAJAR
     doc.setFont('times','bold');doc.setFontSize(9.5)
-    doc.text(namaPenandatangan||`(${jabatanPenandatangan})`,ttX,sy)
-    if(scope!=='keseluruhan'){sy+=5;doc.setFont('times','normal');doc.setFontSize(8.5);doc.text(`NUPTK. ${nipPenandatangan||'-'}`,ttX,sy)}
+    doc.text(namaPenandatangan||`(${jabatanPenandatangan})`,kolKiriX,sy)
+    doc.text(namaWaka||'(Waka Kurikulum belum ditugaskan)',kolKananX,sy)
+    // Baris 5: NUPTK -- SEJAJAR (Mudir secara konvensi tidak perlu NUPTK di kiri, Wakakur selalu tampil)
+    sy+=5;doc.setFont('times','normal');doc.setFontSize(8.5)
+    if(scope!=='keseluruhan') doc.text(`NUPTK. ${nipPenandatangan||'-'}`,kolKiriX,sy)
+    doc.text(`NUPTK. ${nipWaka||'-'}`,kolKananX,sy)
   }
 
   // ── Susun daftar bulan yang akan dicetak ────────────────────────────────
@@ -538,7 +597,7 @@ async function buatDokumenPDF(params: ParamsPDF) {
 
   // Tanda tangan menyusul di halaman terakhir; kalau tidak cukup ruang, pindah dulu.
   if(curY+SIG_H+2>BATAS_BAWAH_KONTEN) pindahHalamanBaru()
-  drawSignature(curY+2)
+  await drawSignature(curY+2)
   drawFooter()
 
   return doc
@@ -560,9 +619,10 @@ function CetakKaldikModal({onClose,namaSekolah,tahunAjaran,daftarAgenda,daftarUn
   const [filterSemester,setFilterSemester]=useState<'semua'|'semester1'|'semester2'>('semua')
   const [loadingAksi,setLoadingAksi]=useState<'preview'|'unduh'|null>(null)
   const [editProfil,setEditProfil]=useState(false)
+  const [sematkanTtdKaldik,setSematkanTtdKaldik]=useState(true)
   const [previewUrl,setPreviewUrl]=useState<string|null>(null)
   const previewRef=useRef<string|null>(null)
-  const [profil,setProfil]=useState<ProfilCetak>({namaSekolah:'',npsn:'',alamat:'',kota:'',namaMudir:'',nipMudir:'',namaKepala:'',nipKepala:'',titiMangsa:''})
+  const [profil,setProfil]=useState<ProfilCetak>({namaSekolah:'',npsn:'',alamat:'',kota:'',namaMudir:'',nipMudir:'',namaKepala:'',nipKepala:'',titiMangsa:'',ttdMudir:'',ttdKepala:'',namaWaka:'',nipWaka:'',ttdWaka:''})
 
   useEffect(()=>{
     const identitas = ambilIdentitasLembaga()
@@ -579,6 +639,11 @@ function CetakKaldikModal({onClose,namaSekolah,tahunAjaran,daftarAgenda,daftarUn
       namaKepala:  unitData?.namaKepala || localStorage.getItem('profil_kepala')||localStorage.getItem('nama_kepala')||'',
       nipKepala:   unitData?.nipKepala || localStorage.getItem('profil_nip')||localStorage.getItem('nip_kepala')||'',
       titiMangsa:  localStorage.getItem('profil_titi_mangsa')||'',
+      ttdMudir:    identitas?.ttdMudir || '',
+      ttdKepala:   unitData?.ttdKepala || '',
+      namaWaka:    (scope==='unit' ? unitData?.namaWakakur : identitas?.namaWakakurPusat) || '',
+      nipWaka:     (scope==='unit' ? unitData?.nipWakakur : identitas?.nipWakakurPusat) || '',
+      ttdWaka:     (scope==='unit' ? unitData?.ttdWakakur : identitas?.ttdWakakurPusat) || '',
     })
   },[namaSekolah,selectedUnitId,scope])
 
@@ -593,12 +658,14 @@ function CetakKaldikModal({onClose,namaSekolah,tahunAjaran,daftarAgenda,daftarUn
   const namaInstitusiCetak=scope==='keseluruhan'?(profil.namaSekolah||namaSekolah):unitTerpilih.label
   const namaPenandatangan=scope==='keseluruhan'?profil.namaMudir:profil.namaKepala
   const nipPenandatangan=scope==='keseluruhan'?profil.nipMudir:profil.nipKepala
+  const ttdPenandatangan=scope==='keseluruhan'?profil.ttdMudir:profil.ttdKepala
+  const wakaLabel=scope==='keseluruhan'?`Wakakur ${namaInstitusiCetak}`:`Wakakur ${unitTerpilih.label}`
   const jabatanPenandatangan=scope==='keseluruhan'?'Mudir':'Kepala Sekolah / Pimpinan Unit'
   const titiMangsaFinal=profil.titiMangsa||titiMangsaHariIni(profil.kota)
   const profilOK=scope==='keseluruhan'?!!profil.namaMudir:!!profil.namaKepala
 
   async function siapkanDoc() {
-    return buatDokumenPDF({scope,unitId:unitTerpilih.id,namaInstitusi:namaInstitusiCetak,namaPenandatangan,jabatanPenandatangan,nipPenandatangan,titiMangsa:titiMangsaFinal,tahunAjaran,filterSemester,daftarAgenda,daftarKlasifikasiAgenda,bulanAkademik})
+    return buatDokumenPDF({scope,unitId:unitTerpilih.id,namaInstitusi:namaInstitusiCetak,namaPenandatangan,jabatanPenandatangan,nipPenandatangan,ttdPenandatangan,sematkanTtd:sematkanTtdKaldik,namaWaka:profil.namaWaka,nipWaka:profil.nipWaka,ttdWaka:profil.ttdWaka,wakaLabel,titiMangsa:titiMangsaFinal,tahunAjaran,filterSemester,daftarAgenda,daftarKlasifikasiAgenda,bulanAkademik})
   }
   async function handlePreview() {
     setLoadingAksi('preview')
@@ -670,6 +737,7 @@ function CetakKaldikModal({onClose,namaSekolah,tahunAjaran,daftarAgenda,daftarUn
                     <p><span className="font-bold text-gray-600">Nama Lembaga:</span> {profil.namaSekolah || namaSekolah || '—'}</p>
                     <p><span className="font-bold text-gray-600">Mudir:</span> {profil.namaMudir || 'Belum diatur di Kelola Data Guru'}</p>
                     <p><span className="font-bold text-gray-600">Kepala Sekolah Unit:</span> {profil.namaKepala || 'Belum diatur di Kelola Data Guru'}{profil.nipKepala ? ` / NUPTK. ${profil.nipKepala}` : ''}</p>
+                    <p><span className="font-bold text-gray-600">Waka Kurikulum:</span> {profil.namaWaka || 'Belum diatur di Kelola Data Guru'}{profil.nipWaka ? ` / NUPTK. ${profil.nipWaka}` : ''}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="col-span-2"><label className="block text-[10px] font-bold text-gray-600 uppercase mb-1">Titi Mangsa (tanggal surat)</label><input type="text" value={profil.titiMangsa} onChange={e=>setProfil(p=>({...p,titiMangsa:e.target.value}))} placeholder={titiMangsaHariIni(profil.kota)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0" /><p className="text-[9px] text-gray-400 mt-0.5">Kosong = otomatis hari ini</p></div>
@@ -679,6 +747,10 @@ function CetakKaldikModal({onClose,namaSekolah,tahunAjaran,daftarAgenda,daftarUn
               )}
             </div>
             {!profilOK&&<div className="flex items-start gap-2 bg-[#FFF9E0] border border-[#FFE480] rounded-lg p-3 text-[10px] text-[#8A6D00]"><span>⚠</span><span>Nama {scope==='keseluruhan'?'Mudir':'Kepala Sekolah'} belum diisi. Klik <strong>Identitas &amp; Tanda Tangan</strong> di atas.</span></div>}
+            <label className="flex items-center gap-2.5 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2.5 cursor-pointer">
+              <input type="checkbox" checked={sematkanTtdKaldik} onChange={e=>setSematkanTtdKaldik(e.target.checked)} className="w-4 h-4 accent-[#6A197D]" />
+              <span className="text-xs font-semibold text-gray-700">Sematkan tanda tangan digital (kalau sudah diunggah di Identitas Lembaga)</span>
+            </label>
             <div className="grid grid-cols-2 gap-3">
               <button onClick={handlePreview} disabled={loadingAksi!==null} className="flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700 transition disabled:opacity-50"><Eye className="w-4 h-4" />{loadingAksi==='preview'?'Memuat…':'Pratinjau PDF'}</button>
               <button onClick={handleUnduh} disabled={loadingAksi!==null} className="flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-semibold bg-rose-600 hover:bg-rose-700 text-white transition disabled:opacity-50"><FileText className="w-4 h-4" />{loadingAksi==='unduh'?'Membuat…':'Unduh PDF'}</button>

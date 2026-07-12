@@ -46,6 +46,7 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
 import { kunciTahun } from '@/lib/tahunAjaran'
 import { ambilIdentitasOtomatis } from '@/lib/identitasOtomatis'
+import { muatGambarBase64 } from '@/lib/muatGambarBase64'
 import { useAksesGuard } from '@/lib/useAksesGuard'
 import { bisaMengeditModul, getCakupanMengajarGuru } from '@/lib/aksesPeran'
 import {
@@ -152,6 +153,7 @@ interface ProfilSekolah {
   nip: string
   nuptk?: string
   titiMangsa?: string   // "Kota, tanggal" — bisa diisi manual; kalau kosong dihitung otomatis dari kota & tanggal hari ini
+  ttdKepala?: string    // URL gambar tanda tangan Kepala Sekolah/Pimpinan (diunggah lewat Identitas Lembaga)
 }
 
 // ─── Konstanta ────────────────────────────────────────────────────────────────
@@ -607,10 +609,11 @@ async function eksporProtaPDF(params: {
   capJpSem1: number
   capJpSem2: number
   mode?: 'unduh' | 'preview'
+  sematkanTtd?: boolean
 }): Promise<string | void> {
   const { default: jsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
-  const { profil, namaGuru, nuptk, namaMapel, namaKelas, tahunAjaran, rows, capJpSem1, capJpSem2, mode = 'unduh' } = params
+  const { profil, namaGuru, nuptk, namaMapel, namaKelas, tahunAjaran, rows, capJpSem1, capJpSem2, mode = 'unduh', sematkanTtd = true } = params
 
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
   const pageW = doc.internal.pageSize.width
@@ -720,6 +723,12 @@ async function eksporProtaPDF(params: {
   doc.setFont('times', 'normal'); doc.setFontSize(9); doc.setTextColor(15, 23, 42)
   doc.text('Mengetahui,', mL, ttdY)
   doc.text('Kepala Sekolah / Pimpinan,', mL, ttdY + 5)
+  if (profil.ttdKepala && sematkanTtd) {
+    try {
+      const ttdBase64 = await muatGambarBase64(profil.ttdKepala)
+      if (ttdBase64) doc.addImage(ttdBase64, 'PNG', mL, ttdY + 8, 32, 28)
+    } catch { /* kalau gagal muat, biarkan kosong (tetap bisa tanda tangan basah manual) */ }
+  }
   doc.setFont('times', 'bold')
   const namaKepalaLines = doc.splitTextToSize(profil.namaKepala || '(Nama Kepala Sekolah)', ttdColW)
   doc.text(namaKepalaLines, mL, ttdY + 39)
@@ -761,13 +770,14 @@ async function eksporPromesPDF(params: {
   alokasiMingguan: Record<string, Record<string, number>>
   capJpEfektif: number
   mode?: 'unduh' | 'preview'
+  sematkanTtd?: boolean
 }): Promise<string | void> {
   const { default: jsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
   const {
     profil, namaGuru, nuptk, namaMapel, namaKelas, tahunAjaran, semester,
     rows, alokasiJpPerMinggu, weeksByBulan, alokasiMingguan, capJpEfektif,
-    mode = 'unduh',
+    mode = 'unduh', sematkanTtd = true,
   } = params
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
@@ -938,6 +948,12 @@ async function eksporPromesPDF(params: {
   doc.setFont('times', 'normal'); doc.setFontSize(10); doc.setTextColor(15, 23, 42)
   doc.text('Mengetahui,', mL, afterTableY)
   doc.text('Kepala Sekolah / Pimpinan,', mL, afterTableY + 4)
+  if (profil.ttdKepala && sematkanTtd) {
+    try {
+      const ttdBase64 = await muatGambarBase64(profil.ttdKepala)
+      if (ttdBase64) doc.addImage(ttdBase64, 'PNG', mL, afterTableY + 7, 30, 26)
+    } catch { /* kalau gagal muat, biarkan kosong */ }
+  }
   doc.setFont('times', 'bold'); doc.setFontSize(10)
   const namaKepalaLines = doc.splitTextToSize(profil.namaKepala || '(Nama Kepala Sekolah)', ttdColW)
   doc.text(namaKepalaLines, mL, afterTableY + 34)
@@ -999,9 +1015,10 @@ export default function ProtaPromesPage() {
   })
 
   const [profil, setProfil] = useState<ProfilSekolah>({
-    namaSekolah: '', alamat: '', kota: '', namaKepala: '', nip: '', nuptk: '',
+    namaSekolah: '', alamat: '', kota: '', namaKepala: '', nip: '', nuptk: '', ttdKepala: '',
   })
   const [editProfil, setEditProfil] = useState(false)
+  const [sematkanTtd, setSematkanTtd] = useState(true)
 
   const [filterGuruId, setFilterGuruId] = useState('')
   const [filterMapelId, setFilterMapelId] = useState('')
@@ -1107,6 +1124,7 @@ export default function ProtaPromesPage() {
       alamat: unitData?.alamat || identitas.alamat || prev.alamat,
       namaKepala: filterUnitId ? (unitData?.namaKepala || '') : (identitas.namaMudir || ''),
       nip: filterUnitId ? (unitData?.nipKepala || '') : (identitas.nipMudir || ''),
+      ttdKepala: filterUnitId ? (unitData?.ttdKepala || '') : (identitas.ttdMudir || ''),
     }))
   }, [filterUnitId])
 
@@ -1283,7 +1301,7 @@ export default function ProtaPromesPage() {
         capJpSem2,
       }
       if (jenis === 'prota-pdf') {
-        const hasilUrl = await eksporProtaPDF({ ...common, mode })
+        const hasilUrl = await eksporProtaPDF({ ...common, mode, sematkanTtd })
         if (mode === 'preview' && hasilUrl) tampilkanPratinjau(hasilUrl as string)
       }
       else if (jenis === 'prota-xlsx') await eksporProtaExcel(common)
@@ -1297,7 +1315,7 @@ export default function ProtaPromesPage() {
           capJpEfektif: d.capJpEfektif,
         }
         if (jenis.endsWith('pdf')) {
-          const hasilUrl = await eksporPromesPDF({ ...paramsPromes, mode })
+          const hasilUrl = await eksporPromesPDF({ ...paramsPromes, mode, sematkanTtd })
           if (mode === 'preview' && hasilUrl) tampilkanPratinjau(hasilUrl as string)
         }
         else await eksporPromesExcel({ ...paramsPromes, weeksFlat: d.weeksFlat })
@@ -1738,6 +1756,12 @@ export default function ProtaPromesPage() {
           <h2 className="text-sm font-bold text-slate-800 border-b border-slate-100 pb-3 flex items-center gap-2">
             <Download className="w-4 h-4 text-[#6A197D]" /> Unduh Dokumen
           </h2>
+
+          <label className="flex items-center gap-2.5 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 cursor-pointer w-fit">
+            <input type="checkbox" checked={sematkanTtd} onChange={e => setSematkanTtd(e.target.checked)} className="w-4 h-4 accent-[#6A197D]" />
+            <span className="text-xs font-bold text-slate-700">Sematkan tanda tangan digital Kepala Sekolah (kalau sudah diunggah di Identitas Lembaga)</span>
+          </label>
+          <p className="text-[10px] text-slate-400 -mt-2">Kalau dimatikan, kolom tanda tangan akan dibiarkan kosong seperti biasa untuk ditandatangani basah secara manual.</p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="border border-[#6A197D]/20 rounded-xl p-4 space-y-3 bg-[#6A197D]/12">
