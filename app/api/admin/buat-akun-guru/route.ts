@@ -4,8 +4,11 @@ import { createClient } from '@supabase/supabase-js'
 // WAJIB jalan di Node.js runtime (butuh service_role key, tidak boleh di edge/browser).
 export const runtime = 'nodejs'
 
-const SUPABASE_URL = 'https://whnwipppzjauxkmdiqfv.supabase.co'
-const SUPABASE_ANON_KEY = 'sb_publishable_szkotq6gG7TVSfBfIumxJQ_92oC5eoH'
+// Ikuti project Supabase yang sama dengan app/supabase.ts (lihat catatan di
+// sana): pakai env var kalau diatur (mis. saat uji coba lokal memakai
+// project Supabase terpisah), kalau tidak baru jatuh ke project produksi.
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://whnwipppzjauxkmdiqfv.supabase.co'
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_szkotq6gG7TVSfBfIumxJQ_92oC5eoH'
 
 /**
  * POST /api/admin/buat-akun-guru

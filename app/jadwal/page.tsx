@@ -4196,18 +4196,20 @@ export default function JadwalPelajaranPage() {
                 <h2 className="font-bold text-slate-800 text-sm">{bolehEdit ? 'Rekapitulasi Beban Jam Mengajar Pendidik' : 'Unduh Jadwal Per Pendidik'}</h2>
               </div>
               <button
-                onClick={() => { setGuruDownloadTarget('semua-zip'); setShowDownloadGuruModal(true) }}
+                onClick={() => { setGuruDownloadTarget(guruLoginId || 'semua-zip'); setShowDownloadGuruModal(true) }}
                 className="flex items-center gap-2 bg-[#6A197D] hover:bg-[#571466] text-white px-4 py-2.5 rounded-xl font-bold text-xs shadow-md transition"
               >
-                <Download className="w-4 h-4" /> Unduh Jadwal Per Guru (PDF)
+                <Download className="w-4 h-4" /> {guruLoginId ? 'Unduh Jadwal Saya (PDF)' : 'Unduh Jadwal Per Guru (PDF)'}
               </button>
             </div>
-            <div className="md:w-1/3">
-              <select value={cariGuruId} onChange={e => setCariGuruId(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
-                <option value="">🔍 Semua pendidik</option>
-                {daftarGuru.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
-              </select>
-            </div>
+            {!guruLoginId && (
+              <div className="md:w-1/3">
+                <select value={cariGuruId} onChange={e => setCariGuruId(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
+                  <option value="">🔍 Semua pendidik</option>
+                  {daftarGuru.map(g => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                </select>
+              </div>
+            )}
             <div className="overflow-x-auto border border-slate-200 rounded-xl max-h-[500px] overflow-y-auto">
               <table className="w-full text-xs border-collapse">
                 <thead className="sticky top-0 z-30">
@@ -4221,7 +4223,7 @@ export default function JadwalPelajaranPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {daftarGuru.filter(g => !cariGuruId || g.id === cariGuruId).map(g => {
+                  {daftarGuru.filter(g => guruLoginId ? g.id === guruLoginId : (!cariGuruId || g.id === cariGuruId)).map(g => {
                     const rekap = rekapPerHari(g.id)
                     const totalJp = rekapJamGuru()[g.id] || 0
                     return (
