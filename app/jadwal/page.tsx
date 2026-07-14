@@ -345,11 +345,17 @@ function generatePrintHtml(p: {
   }
 
   // === Header kolom: Hari -> Rombel ===
+  // Warna kolom diselang-seling per hari (putih / ungu soft) supaya di tabel
+  // lebar yang menampilkan banyak hari sekaligus, tiap hari mudah dibedakan
+  // sekilas tanpa harus membaca ulang label header tiap kali.
+  const WARNA_HARI_SOFT: Record<string, string> = { 'Senin': '#fff', 'Selasa': '#EDE3F3', 'Rabu': '#fff', 'Kamis': '#EDE3F3', 'Jumat': '#fff' }
+  const warnaHari = (hari: string) => WARNA_HARI_SOFT[hari] || '#fff'
+
   const thHari = hariList.map(h =>
-    `<th colspan="${rombelFiltered.length}" style="padding:4px 2px;font-size:9px;text-align:center;background:#EDE3F3;color:#1E0A28;border:1px solid #000">${h.toUpperCase()}</th>`
+    `<th colspan="${rombelFiltered.length}" style="padding:4px 2px;font-size:9px;text-align:center;background:${warnaHari(h)};color:#1E0A28;border:1px solid #000">${h.toUpperCase()}</th>`
   ).join('')
-  const thRombel = hariList.map(() =>
-    rombelFiltered.map((r: any) => `<th style="padding:3px 2px;font-size:8px;text-align:center;background:#EDE3F3;color:#1E0A28;border:1px solid #000">${r.nama}</th>`).join('')
+  const thRombel = hariList.map(h =>
+    rombelFiltered.map((r: any) => `<th style="padding:3px 2px;font-size:8px;text-align:center;background:${warnaHari(h)};color:#1E0A28;border:1px solid #000">${r.nama}</th>`).join('')
   ).join('')
 
   let istirahatIdx = 0
@@ -395,7 +401,7 @@ function generatePrintHtml(p: {
 
       return grupList.map((g, gi) => {
         const cell = g.cell
-        if (!cell) return `<td key="${gi}" style="padding:3px 2px;border:1px solid #000;text-align:center;font-size:7px;color:#cbd5e1">-</td>`
+        if (!cell) return `<td key="${gi}" style="padding:3px 2px;border:1px solid #000;text-align:center;font-size:7px;color:#94a3b8;background:${warnaHari(hari)}">-</td>`
 
         if (cell.tipe === 'tetap' && g.jumlahKolom > 1) {
           return `<td colspan="${g.jumlahKolom}" style="padding:3px 4px;border:1px solid #000;text-align:center;background:#dbeafe;vertical-align:middle">
@@ -403,7 +409,7 @@ function generatePrintHtml(p: {
           </td>`
         }
 
-        let bg = '#fff'
+        let bg = warnaHari(hari)
         if (cell.tipe === 'tetap') bg = '#dbeafe'
         if (cell.tipe === 'gabungan') bg = '#d1fae5'
         if (cell.tipe === 'giliran') bg = '#ede9fe'
@@ -646,22 +652,46 @@ function generatePrintHtmlGuru(p: {
     </div>`
 
   // ── Tabel jadwal utama ─────────────────────────────────────────────────────
+  const jumlahKolomJadwal = 1 + LIST_HARI_UNIT.length
+  const lebarKolomPersen = (100 / jumlahKolomJadwal).toFixed(4)
+
+  // CATATAN PENTING soal rata tengah vertikal di hasil unduhan PDF: memakai
+  // padding + vertical-align:middle saja ternyata tidak selalu konsisten.
+  // Teknik yang jauh lebih pasti untuk teks SATU BARIS: beri tinggi (height)
+  // dan line-height dengan ANGKA YANG SAMA PERSIS -- dengan begitu tulisan
+  // otomatis jatuh tepat di tengah kotak, tidak bergantung pada perhitungan
+  // padding/vertical-align renderer sama sekali.
+  const TINGGI_HEADER = 36
+  const JARAK_BAWAH = 16 // jarak ekstra antara teks & garis bawah sel (px)
   const thHari = LIST_HARI_UNIT.map(h =>
-    `<th style="font-size:16px;font-weight:900;background:#EDE3F3;color:#000;border:1px solid #000;text-align:center;vertical-align:middle">${h}</th>`
+    `<th style="font-size:16px;font-weight:900;background:#EDE3F3;color:#000;border:1px solid #000;text-align:center;height:${TINGGI_HEADER}px;line-height:${TINGGI_HEADER - JARAK_BAWAH}px;padding:0px 4px ${JARAK_BAWAH}px 4px">${h}</th>`
   ).join('')
 
-  const rowsHtml = allSlots.map(slot => {
-    if (slot.jenis === 'istirahat') {
-      const isZuhur = /dzuhur|sholat|solat/i.test(slot.label)
-      return `<tr style="background:${isZuhur ? '#d1fae5' : '#fef9c3'}">
-        <td style="font-size:16px;font-weight:800;border:1px solid #000;text-align:center;vertical-align:middle;white-space:normal;color:#000">${slot.mulai}-${slot.selesai}</td>
-        <td colspan="${LIST_HARI_UNIT.length}" style="font-size:16px;font-weight:800;text-align:center;border:1px solid #000;vertical-align:middle;color:#000">${slot.label.toUpperCase()}</td>
-      </tr>`
-    }
-    // Kolom Jam: SATU baris saja "07.30-08.10" -- boleh wrap kalau memang tidak
-    // muat, TIDAK dipaksa jadi beberapa baris terpisah seperti sebelumnya.
-    const tdWaktu = `<td style="font-size:16px;font-weight:700;background:#f8fafc;border:1px solid #000;text-align:center;vertical-align:middle;white-space:normal;color:#000">${slot.mulai}-${slot.selesai}</td>`
+  // Isi satu sel jadwal (kelas & mapel digabung SATU BARIS, TIDAK bold, rata
+  // tengah). Dipisah jadi fungsi supaya dipakai ulang saat membangun tiap baris.
+  // CATATAN: teks diletakkan LANGSUNG di dalam <td> (tanpa dibungkus <span>
+  // terpisah) -- persis seperti sel tabel guru piket di bawah, yang terbukti
+  // rata tengah dengan benar. Ternyata elemen <span> pembungkus dengan
+  // line-height sendiri di dalam <td> bisa membuat html2canvas salah hitung
+  // posisi tegak lurusnya. Menaruh teks langsung di <td> (dengan padding &
+  // line-height di level <td> itu sendiri) jauh lebih konsisten. Padding
+  // bawah dibuat lebih besar dari padding atas (0px) supaya ada jarak yang
+  // terlihat antara teks dan garis tabel bagian bawah.
+  const TINGGI_SEL = 34
+  const buatTdKosong = () => `<td style="border:1px solid #000;background:#262626;text-align:center"></td>`
+  // min-height (bukan height biasa) supaya kalau kebetulan teksnya panjang
+  // dan terpaksa turun 2 baris, selnya tetap boleh melebar ke bawah secara
+  // wajar -- tidak terpotong. Untuk kasus normal (1 baris, paling sering
+  // terjadi) height:line-height yang sama persis ini yang membuat teks jatuh
+  // tepat di tengah tanpa bergantung pada padding/vertical-align sama sekali.
+  const buatTdIsi = (bg: string, teks: string, warnaSekunder?: string) =>
+    `<td style="border:1px solid #000;text-align:center;background:${bg};height:${TINGGI_SEL}px;line-height:${TINGGI_SEL - JARAK_BAWAH}px;padding:0px 4px ${JARAK_BAWAH}px 4px;font-size:13px;font-weight:400;color:${warnaSekunder || '#000'};white-space:normal;word-break:break-word">${teks}</td>`
 
+  const buatTdWaktu = (slot: WaktuSlot) =>
+    `<td style="font-size:14px;font-weight:700;background:#f8fafc;border:1px solid #000;text-align:center;height:${TINGGI_SEL}px;line-height:${TINGGI_SEL - JARAK_BAWAH}px;padding:0px 3px ${JARAK_BAWAH}px 3px;white-space:normal;color:#000">${slot.mulai}-${slot.selesai}</td>`
+
+  const buatBarisData = (slot: WaktuSlot): string => {
+    const tdWaktu = buatTdWaktu(slot)
     const tdCells = LIST_HARI_UNIT.map(hari => {
       const j = daftarJadwal.find((jj: any) => jj.hari === hari && jj.waktuId === slot.id && jj.guruId === guru.id)
       // Jadwal Berlaku Umum (jenis Mata Pelajaran) yang melibatkan guru ini pada
@@ -670,30 +700,66 @@ function generatePrintHtmlGuru(p: {
       // ini "hilang" dari unduhan per-guru walau sudah benar di tabel utama.
       const jt = !j ? daftarJadwalTetap.find(t => t.jenis === 'mapel' && t.guruId === guru.id && (t.hari === hari || t.hari === 'Semua') && t.waktuId === slot.id) : null
 
-      if (!j && !jt) return `<td style="border:1px solid #000;background:#262626;text-align:center"></td>`
+      if (!j && !jt) return buatTdKosong()
 
       if (jt) {
         const mapelTetap = daftarMapel.find((m: any) => m.id === jt.mapelId)
         const kelasList = jt.berlakuUntuk === 'semua' ? 'Semua Kelas'
           : jt.berlakuUntuk === 'rombel' ? jt.rombelIds.map(rid => daftarRombel.find((r: any) => r.id === rid)?.nama).filter(Boolean).join(', ')
           : (daftarLembaga.find((l: any) => l.id === jt.lembagaIds?.[0])?.nama || 'Unit')
-        return `<td style="border:1px solid #000;text-align:center;vertical-align:middle;background:#d1fae5">
-          <span style="font-size:16px;font-weight:900;display:block;line-height:1.25;color:#000;text-align:center;white-space:normal;word-break:break-word">${mapelTetap?.kode || mapelTetap?.nama || jt.nama || '-'}</span>
-          <span style="font-size:13px;font-weight:600;display:block;line-height:1.25;margin-top:1px;white-space:normal;word-break:break-word;color:#065f46;text-align:center">${kelasList}</span>
-        </td>`
+        return buatTdIsi('#d1fae5', `${mapelTetap?.kode || mapelTetap?.nama || jt.nama || '-'} &middot; ${kelasList}`, '#065f46')
       }
 
       const rombel = daftarRombel.find((r: any) => r.id === j.rombelId)
       const mapel = daftarMapel.find((m: any) => m.id === j.mapelId)
-      return `<td style="border:1px solid #000;text-align:center;vertical-align:middle;background:#eef2ff">
-        <span style="font-size:16px;font-weight:900;display:block;line-height:1.25;color:#000;text-align:center;white-space:normal;word-break:break-word">${rombel?.nama || '-'}</span>
-        <span style="font-size:16px;font-weight:600;display:block;line-height:1.25;margin-top:1px;white-space:normal;word-break:break-word;color:#000;text-align:center">${mapel?.nama || '-'}</span>
-      </td>`
+      return buatTdIsi('#eef2ff', `${rombel?.nama || '-'} &middot; ${mapel?.nama || '-'}`)
     }).join('')
     return `<tr>${tdWaktu}${tdCells}</tr>`
-  }).join('')
+  }
 
-  // ── Tabel piket guru ───────────────────────────────────────────────────────
+  // Baris istirahat/sholat: SEBELUMNYA memakai <td colspan> untuk membentangkan
+  // satu label di semua kolom hari. Ternyata itu membuat html2canvas (dipakai
+  // saat render ke PDF) salah menghitung tinggi baris-baris SESUDAHNYA,
+  // sehingga teks di baris-baris berikutnya terlihat menempel ke bagian bawah
+  // sel padahal tampil normal di layar browser biasa. Perbaikannya: baris
+  // istirahat/sholat sekarang dibuat sebagai <div> flexbox TERPISAH (bukan
+  // bagian dari <table>), sehingga TIDAK ADA lagi <td colspan> di seluruh
+  // dokumen -- vertical-align:middle jadi bekerja benar & konsisten di semua
+  // baris data lainnya.
+  const buatBannerIstirahat = (slot: WaktuSlot): string => {
+    const isZuhur = /dzuhur|sholat|solat/i.test(slot.label)
+    const bg = isZuhur ? '#d1fae5' : '#fef9c3'
+    // Sama seperti sel tabel lain: pakai height + line-height (bukan flex
+    // align-items:center) supaya jarak ekstra JARAK_BAWAH di bawah teks
+    // konsisten sejajar dengan header/kolom waktu/kolom pelajaran di atas.
+    return `<div style="display:flex;border:1px solid #000;border-top:0;background:${bg}">
+      <div style="width:${lebarKolomPersen}%;font-size:14px;font-weight:700;border-right:1px solid #000;height:${TINGGI_SEL}px;line-height:${TINGGI_SEL - JARAK_BAWAH}px;padding:0px 3px ${JARAK_BAWAH}px 3px;text-align:center;color:#000">${slot.mulai}-${slot.selesai}</div>
+      <div style="flex:1;font-size:14px;font-weight:700;height:${TINGGI_SEL}px;line-height:${TINGGI_SEL - JARAK_BAWAH}px;padding:0px 3px ${JARAK_BAWAH}px 3px;text-align:center;color:#000">${slot.label.toUpperCase()}</div>
+    </div>`
+  }
+
+  // Kelompokkan slot menjadi "segmen": segmen tabel (baris data yang berurutan)
+  // diselingi segmen banner (istirahat/sholat) -- lihat catatan di atas.
+  type SegmenJadwal = { jenis: 'tabel'; slots: WaktuSlot[] } | { jenis: 'banner'; slot: WaktuSlot }
+  const segmenJadwal: SegmenJadwal[] = []
+  let bufferSlotJadwal: WaktuSlot[] = []
+  allSlots.forEach(slot => {
+    if (slot.jenis === 'istirahat') {
+      if (bufferSlotJadwal.length) { segmenJadwal.push({ jenis: 'tabel', slots: bufferSlotJadwal }); bufferSlotJadwal = [] }
+      segmenJadwal.push({ jenis: 'banner', slot })
+    } else {
+      bufferSlotJadwal.push(slot)
+    }
+  })
+  if (bufferSlotJadwal.length) segmenJadwal.push({ jenis: 'tabel', slots: bufferSlotJadwal })
+
+  const bodyJadwalHtml = segmenJadwal.map(seg =>
+    seg.jenis === 'banner'
+      ? buatBannerIstirahat(seg.slot)
+      : `<table class="tabel-jadwal-guru" style="margin-bottom:0"><tbody>${seg.slots.map(buatBarisData).join('')}</tbody></table>`
+  ).join('')
+
+  // ── Tabel piket guru (dibuat lebih ringkas: huruf & jarak dalam sel diperkecil) ─
   const getPiketGuruIdsHariGabungan = (hari: string): string[] => {
     const idSet = new Set<string>()
     daftarPiket.filter(pk => pk.hari === hari).forEach(pk => pk.guruIds.forEach(gid => idSet.add(gid)))
@@ -721,7 +787,7 @@ function generatePrintHtmlGuru(p: {
       const guruPiket = gId ? daftarGuru.find((g: any) => g.id === gId) : null
       const namaG = guruPiket?.nama || ''
       const labelUnit = guruPiket ? namaUnitGuru(guruPiket) : ''
-      return `<td style="padding:12px 6px;font-size:16px;border:1px solid #000;text-align:center;vertical-align:middle;white-space:normal;word-break:break-word;line-height:1.4">${namaG}${labelUnit ? `<br/><span style="font-size:14px;color:#000">(${labelUnit})</span>` : ''}</td>`
+      return `<td style="padding:2px 4px ${JARAK_BAWAH}px 4px;font-size:13px;border:1px solid #000;text-align:center;vertical-align:middle;white-space:normal;word-break:break-word;line-height:1.3">${namaG}${labelUnit ? `<br/><span style="font-size:11px;color:#000">(${labelUnit})</span>` : ''}</td>`
     }).join('')
     return `<tr>${cells}</tr>`
   }).join('')
@@ -740,7 +806,7 @@ function generatePrintHtmlGuru(p: {
   .judul { text-align:center; font-size:19px; font-weight:900; color:#000; text-transform:uppercase; padding-bottom:12px; border-bottom:3px solid #000; margin-bottom:10px; line-height:1.4; }
   .kop-row { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:16px; }
   .tabel-jadwal-guru th,
-  .tabel-jadwal-guru td { padding: 9px 7px; }
+  .tabel-jadwal-guru td { padding: 4px 4px; }
   @media print {
     body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     @page { size:A4 portrait; margin:8mm; }
@@ -756,22 +822,246 @@ function generatePrintHtmlGuru(p: {
     ${infoKanan}
   </div>
 
-  <table class="tabel-jadwal-guru" style="margin-bottom:8px">
-    <thead>
-      <tr>
-        <th style="font-size:16px;font-weight:900;background:#EDE3F3;color:#000;border:1px solid #000;text-align:center">Jam</th>
-        ${thHari}
-      </tr>
-    </thead>
-    <tbody>${rowsHtml}</tbody>
-  </table>
+  <div style="margin-bottom:8px">
+    <table class="tabel-jadwal-guru" style="margin-bottom:0">
+      <thead>
+        <tr>
+          <th style="font-size:16px;font-weight:900;background:#EDE3F3;color:#000;border:1px solid #000;text-align:center;height:${TINGGI_HEADER}px;line-height:${TINGGI_HEADER - JARAK_BAWAH}px;padding:0px 4px ${JARAK_BAWAH}px 4px">Jam</th>
+          ${thHari}
+        </tr>
+      </thead>
+    </table>
+    ${bodyJadwalHtml}
+  </div>
 
   <div style="margin-top:10px">
     ${piketLabel ? `<p style="font-size:18px;font-weight:700;color:#000;margin-bottom:6px;line-height:1.4">${piketLabel}</p>` : ''}
     <p style="font-size:18px;color:#000;margin-bottom:8px;line-height:1.4">Apabila bapak/ibu berhalangan hadir, dapat menghubungi guru piket berikut:</p>
     <table style="table-layout:fixed">
       <thead>
-        <tr>${hariPiketKolom.map(h => `<th style="padding:8px 6px;font-size:16px;font-weight:800;background:#EDE3F3;color:#000;border:1px solid #000;text-align:center">${h}</th>`).join('')}</tr>
+        <tr>${hariPiketKolom.map(h => `<th style="padding:2px 4px ${JARAK_BAWAH}px 4px;font-size:13px;font-weight:800;background:#EDE3F3;color:#000;border:1px solid #000;text-align:center">${h}</th>`).join('')}</tr>
+      </thead>
+      <tbody>${piketTableRows}</tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>`
+}
+
+// ============================================================
+// HELPER: BUAT HTML JADWAL PER-KELAS (format sama seperti "JADWAL GURU",
+// tapi kolomnya tetap Hari x Jam, isinya Mapel + nama Guru untuk kelas ini).
+// Dipakai untuk unduh PDF per-kelas (satu-satu atau dibungkus ZIP semua kelas).
+// ============================================================
+function generatePrintHtmlKelas(p: {
+  rombel: any
+  namaSekolahCetak: string
+  allSlots: WaktuSlot[]
+  daftarJadwal: any[]
+  daftarJadwalTetap: JadwalTetap[]
+  daftarJadwalGiliran: JadwalGiliran[]
+  daftarKelasGabungan: KelasGabungan[]
+  daftarMapel: any[]
+  daftarRombel: any[]
+  daftarTingkat: any[]
+  daftarPiket: PiketGuru[]
+  daftarGuru: any[]
+  daftarLembaga: any[]
+}): string {
+  const {
+    rombel, namaSekolahCetak, allSlots, daftarJadwal, daftarJadwalTetap, daftarJadwalGiliran,
+    daftarKelasGabungan, daftarMapel, daftarRombel, daftarTingkat, daftarPiket, daftarGuru, daftarLembaga,
+  } = p
+
+  const infoKiri = `
+    <div>
+      <p style="font-size:16px;font-weight:900;color:#000">Kelas ${rombel.nama}</p>
+    </div>`
+
+  // ── Lookup jadwal kelas ini per hari+slot -- LOGIKA SAMA PERSIS dengan yang
+  //    dipakai di "Unduh Jadwal Keseluruhan" (generatePrintHtml -> getCell),
+  //    supaya jenis jadwal apa pun (jadwal tetap, kelas gabungan, giliran,
+  //    jadwal biasa) tetap konsisten muncul sama di kedua jenis unduhan.
+  const getRombelLembagaId = (rombelId: string) => {
+    const r = daftarRombel.find((rr: any) => rr.id === rombelId)
+    if (!r) return null
+    const t = daftarTingkat.find((tt: any) => tt.id === r.tingkatId)
+    return t ? t.lembagaId : null
+  }
+  const getTetap = (hari: string, waktuId: string, rombelId: string) => daftarJadwalTetap.find(jt => {
+    const hariOk = jt.hari === hari || jt.hari === 'Semua'
+    if (!hariOk || jt.waktuId !== waktuId) return false
+    if (jt.berlakuUntuk === 'semua') return true
+    if (jt.berlakuUntuk === 'rombel') return jt.rombelIds.includes(rombelId)
+    if (jt.berlakuUntuk === 'lembaga') { const lId = getRombelLembagaId(rombelId); return lId ? jt.lembagaIds.includes(lId) : false }
+    return false
+  })
+  const cariJadwalGabunganLintasKelas = (hari: string, slotId: string, rombelId: string) => {
+    const grup = daftarKelasGabungan.filter(kg => kg.rombelIds?.includes(rombelId) && kg.rombelIds?.length > 1)
+    for (const kg of grup) {
+      const jGab = daftarJadwal.find(jj => jj.hari === hari && jj.waktuId === slotId && jj.mapelId === kg.mapelId && kg.rombelIds.includes(jj.rombelId))
+      if (jGab) return jGab
+    }
+    return null
+  }
+  const getCell = (hari: string, slotId: string, rombelId: string): { label: string; sub: string } | null => {
+    const tetap = getTetap(hari, slotId, rombelId)
+    if (tetap) {
+      if (tetap.jenis === 'mapel') {
+        const mapelTetap = daftarMapel.find((m: any) => m.id === tetap.mapelId)
+        const guruTetap = daftarGuru.find((g: any) => g.id === tetap.guruId)
+        return { label: mapelTetap?.kode || mapelTetap?.nama || tetap.nama, sub: guruTetap?.nama || '' }
+      }
+      return { label: tetap.nama, sub: '' }
+    }
+    const giliran = daftarJadwalGiliran.find(jg => jg.rombelId === rombelId && jg.waktuId === slotId && jg.hari === hari)
+    const j = daftarJadwal.find(jj => jj.hari === hari && jj.waktuId === slotId && jj.rombelId === rombelId) || cariJadwalGabunganLintasKelas(hari, slotId, rombelId)
+    if (giliran && !j) {
+      const labelGab = giliran.mapelGuruList.map(mg => daftarMapel.find((m: any) => m.id === mg.mapelId)?.nama || '').filter(Boolean).join('/')
+      const guruGab = giliran.mapelGuruList.map(mg => daftarGuru.find((g: any) => g.id === mg.guruId)?.nama || '').filter(Boolean).join(' / ')
+      return { label: labelGab || 'Bergiliran', sub: guruGab }
+    }
+    if (!j) return null
+    const mapel = daftarMapel.find((m: any) => m.id === j.mapelId)
+    const guru = daftarGuru.find((g: any) => g.id === j.guruId)
+    return { label: (mapel as any)?.kode || mapel?.nama || '-', sub: guru?.nama || '' }
+  }
+
+  // ── Tabel jadwal utama (sama persis polanya dengan jadwal guru: segmen
+  //    tabel diselingi banner istirahat/sholat sebagai <div> terpisah -- TIDAK
+  //    ada <td colspan> sama sekali, supaya html2canvas tetap menghitung
+  //    tinggi baris dengan benar dan teks rata tengah).
+  const jumlahKolomJadwal = 1 + LIST_HARI_UNIT.length
+  const lebarKolomPersen = (100 / jumlahKolomJadwal).toFixed(4)
+
+  const TINGGI_HEADER = 36
+  const JARAK_BAWAH = 16 // jarak ekstra antara teks & garis bawah sel (px)
+  const thHari = LIST_HARI_UNIT.map(h =>
+    `<th style="font-size:16px;font-weight:900;background:#EDE3F3;color:#000;border:1px solid #000;text-align:center;height:${TINGGI_HEADER}px;line-height:${TINGGI_HEADER - JARAK_BAWAH}px;padding:0px 4px ${JARAK_BAWAH}px 4px">${h}</th>`
+  ).join('')
+
+  const TINGGI_SEL = 34
+  const buatTdKosong = () => `<td style="border:1px solid #000;background:#262626;text-align:center"></td>`
+  const buatTdIsi = (bg: string, teks: string, warnaSekunder?: string) =>
+    `<td style="border:1px solid #000;text-align:center;background:${bg};height:${TINGGI_SEL}px;line-height:${TINGGI_SEL - JARAK_BAWAH}px;padding:0px 4px ${JARAK_BAWAH}px 4px;font-size:13px;font-weight:400;color:${warnaSekunder || '#000'};white-space:normal;word-break:break-word">${teks}</td>`
+
+  const buatTdWaktu = (slot: WaktuSlot) =>
+    `<td style="font-size:14px;font-weight:700;background:#f8fafc;border:1px solid #000;text-align:center;height:${TINGGI_SEL}px;line-height:${TINGGI_SEL - JARAK_BAWAH}px;padding:0px 3px ${JARAK_BAWAH}px 3px;white-space:normal;color:#000">${slot.mulai}-${slot.selesai}</td>`
+
+  const buatBarisData = (slot: WaktuSlot): string => {
+    const tdWaktu = buatTdWaktu(slot)
+    const tdCells = LIST_HARI_UNIT.map(hari => {
+      const cell = getCell(hari, slot.id, rombel.id)
+      if (!cell) return buatTdKosong()
+      const teks = cell.sub ? `${cell.label} &middot; ${cell.sub}` : cell.label
+      return buatTdIsi('#eef2ff', teks)
+    }).join('')
+    return `<tr>${tdWaktu}${tdCells}</tr>`
+  }
+
+  const buatBannerIstirahat = (slot: WaktuSlot): string => {
+    const isZuhur = /dzuhur|sholat|solat/i.test(slot.label)
+    const bg = isZuhur ? '#d1fae5' : '#fef9c3'
+    // Sama seperti sel tabel lain: pakai height + line-height (bukan flex
+    // align-items:center) supaya jarak ekstra JARAK_BAWAH di bawah teks
+    // konsisten sejajar dengan header/kolom waktu/kolom pelajaran di atas.
+    return `<div style="display:flex;border:1px solid #000;border-top:0;background:${bg}">
+      <div style="width:${lebarKolomPersen}%;font-size:14px;font-weight:700;border-right:1px solid #000;height:${TINGGI_SEL}px;line-height:${TINGGI_SEL - JARAK_BAWAH}px;padding:0px 3px ${JARAK_BAWAH}px 3px;text-align:center;color:#000">${slot.mulai}-${slot.selesai}</div>
+      <div style="flex:1;font-size:14px;font-weight:700;height:${TINGGI_SEL}px;line-height:${TINGGI_SEL - JARAK_BAWAH}px;padding:0px 3px ${JARAK_BAWAH}px 3px;text-align:center;color:#000">${slot.label.toUpperCase()}</div>
+    </div>`
+  }
+
+  type SegmenJadwal = { jenis: 'tabel'; slots: WaktuSlot[] } | { jenis: 'banner'; slot: WaktuSlot }
+  const segmenJadwal: SegmenJadwal[] = []
+  let bufferSlotJadwal: WaktuSlot[] = []
+  allSlots.forEach(slot => {
+    if (slot.jenis === 'istirahat') {
+      if (bufferSlotJadwal.length) { segmenJadwal.push({ jenis: 'tabel', slots: bufferSlotJadwal }); bufferSlotJadwal = [] }
+      segmenJadwal.push({ jenis: 'banner', slot })
+    } else {
+      bufferSlotJadwal.push(slot)
+    }
+  })
+  if (bufferSlotJadwal.length) segmenJadwal.push({ jenis: 'tabel', slots: bufferSlotJadwal })
+
+  const bodyJadwalHtml = segmenJadwal.map(seg =>
+    seg.jenis === 'banner'
+      ? buatBannerIstirahat(seg.slot)
+      : `<table class="tabel-jadwal-guru" style="margin-bottom:0"><tbody>${seg.slots.map(buatBarisData).join('')}</tbody></table>`
+  ).join('')
+
+  // ── Tabel piket guru (informasi kontak kalau ada guru berhalangan hadir) --
+  //    HANYA guru piket dari unit/lembaga yang SAMA dengan kelas ini yang
+  //    ditampilkan (mis. kelas SMP hanya menampilkan piket SMP, kelas SMA
+  //    hanya menampilkan piket SMA) supaya tidak tercampur antar jenjang.
+  const lembagaKelasIni = getRombelLembagaId(rombel.id)
+  const getPiketGuruIdsHariGabungan = (hari: string): string[] => {
+    const idSet = new Set<string>()
+    daftarPiket
+      .filter(pk => pk.hari === hari && (!lembagaKelasIni || pk.lembagaId === lembagaKelasIni))
+      .forEach(pk => pk.guruIds.forEach(gid => idSet.add(gid)))
+    return Array.from(idSet)
+  }
+  const hariPiketKolom = LIST_HARI.slice(0, 5)
+  const piketGabunganPerHari = hariPiketKolom.map(h => getPiketGuruIdsHariGabungan(h))
+  const maxBarisPiket = Math.max(...piketGabunganPerHari.map(ids => ids.length), 1)
+  const piketTableRows = Array.from({ length: maxBarisPiket }).map((_, rowIdx) => {
+    const cells = piketGabunganPerHari.map(ids => {
+      const gId = ids[rowIdx]
+      const guruPiket = gId ? daftarGuru.find((g: any) => g.id === gId) : null
+      const namaG = guruPiket?.nama || ''
+      return `<td style="padding:2px 4px ${JARAK_BAWAH}px 4px;font-size:13px;border:1px solid #000;text-align:center;vertical-align:middle;white-space:normal;word-break:break-word;line-height:1.3">${namaG}</td>`
+    }).join('')
+    return `<tr>${cells}</tr>`
+  }).join('')
+
+  return `<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<title>Jadwal Kelas ${rombel.nama}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Times New Roman', Times, serif; font-size: 16px; background:#fff; color:#000; }
+  table { border-collapse: collapse; width:100%; table-layout:fixed; }
+  td, th { vertical-align: middle; word-break: break-word; }
+  .page-wrap { padding: 8mm 8mm 6mm 8mm; }
+  .judul { text-align:center; font-size:19px; font-weight:900; color:#000; text-transform:uppercase; padding-bottom:12px; border-bottom:3px solid #000; margin-bottom:10px; line-height:1.4; }
+  .kop-row { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:16px; gap:16px; }
+  .tabel-jadwal-guru th,
+  .tabel-jadwal-guru td { padding: 4px 4px; }
+  @media print {
+    body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    @page { size:A4 portrait; margin:8mm; }
+  }
+</style>
+</head>
+<body>
+<div class="page-wrap">
+  <div class="judul">JADWAL KELAS — ${namaSekolahCetak.toUpperCase()}</div>
+
+  <div class="kop-row">
+    ${infoKiri}
+  </div>
+
+  <div style="margin-bottom:8px">
+    <table class="tabel-jadwal-guru" style="margin-bottom:0">
+      <thead>
+        <tr>
+          <th style="font-size:16px;font-weight:900;background:#EDE3F3;color:#000;border:1px solid #000;text-align:center;height:${TINGGI_HEADER}px;line-height:${TINGGI_HEADER - JARAK_BAWAH}px;padding:0px 4px ${JARAK_BAWAH}px 4px">Jam</th>
+          ${thHari}
+        </tr>
+      </thead>
+    </table>
+    ${bodyJadwalHtml}
+  </div>
+
+  <div style="margin-top:10px">
+    <p style="font-size:18px;font-weight:900;color:#000;margin-bottom:8px;line-height:1.4">Daftar Piket Guru</p>
+    <table style="table-layout:fixed">
+      <thead>
+        <tr>${hariPiketKolom.map(h => `<th style="padding:2px 4px ${JARAK_BAWAH}px 4px;font-size:13px;font-weight:800;background:#EDE3F3;color:#000;border:1px solid #000;text-align:center">${h}</th>`).join('')}</tr>
       </thead>
       <tbody>${piketTableRows}</tbody>
     </table>
@@ -847,7 +1137,7 @@ export default function JadwalPelajaranPage() {
   const [keteranganUnit, setKeteranganUnit] = useState<{ [unitId: string]: string }>({})
 
   // --- UI State ---
-  const [tabView, setTabView] = useState<'waktu' | 'pengaturan_kelas' | 'input' | 'rekap_guru' | 'rekap_jadwal'>('input')
+  const [tabView, setTabView] = useState<'waktu' | 'pengaturan_kelas' | 'input' | 'rekap_guru' | 'rekap_kelas' | 'rekap_jadwal'>('input')
 
   useEffect(() => {
     // Akses lihat-saja tidak boleh berada di tab yang berisi form isian
@@ -961,9 +1251,18 @@ export default function JadwalPelajaranPage() {
   }, [guruLoginId])
   const [sedangMengunduhGuru, setSedangMengunduhGuru] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [previewJudul, setPreviewJudul] = useState('Pratinjau Jadwal Guru')
   const previewRef = useRef<string | null>(null)
   useEffect(() => { return () => { if (previewRef.current) URL.revokeObjectURL(previewRef.current) } }, [])
   const [progresUnduhGuru, setProgresUnduhGuru] = useState({ selesai: 0, total: 0 })
+
+  // Modal & state untuk unduhan jadwal PER-KELAS (satu-satu atau ZIP semua) --
+  // mirip persis pola per-guru di atas, hanya targetnya rombel/kelas.
+  const [showDownloadKelasModal, setShowDownloadKelasModal] = useState(false)
+  const [kelasDownloadTarget, setKelasDownloadTarget] = useState<string>('semua-zip')
+  const [cariKelasId, setCariKelasId] = useState('')
+  const [sedangMengunduhKelas, setSedangMengunduhKelas] = useState(false)
+  const [progresUnduhKelas, setProgresUnduhKelas] = useState({ selesai: 0, total: 0 })
 
   // ============================================================
   // INIT
@@ -2801,6 +3100,7 @@ export default function JadwalPelajaranPage() {
       if (aksi === 'preview') {
         if (previewRef.current) URL.revokeObjectURL(previewRef.current)
         previewRef.current = url
+        setPreviewJudul('Pratinjau Jadwal Guru')
         setPreviewUrl(url)
         setProgresUnduhGuru({ selesai: 1, total: 1 })
         return
@@ -2874,6 +3174,98 @@ export default function JadwalPelajaranPage() {
     }
     const guru = daftarGuru.find(g => g.id === guruDownloadTarget)
     if (guru) await handleDownloadSatuGuru(guru, 'preview')
+  }
+
+  // Bangun HTML jadwal untuk satu kelas (membungkus generatePrintHtmlKelas dengan data terkini halaman ini)
+  const buatHtmlJadwalSatuKelas = (rombel: any) => {
+    const allSlotsUrutLokal = [...daftarWaktu].sort((a, b) => Number(a.jamKe || 0) - Number(b.jamKe || 0))
+    return generatePrintHtmlKelas({
+      rombel, namaSekolahCetak: namaInduk, allSlots: allSlotsUrutLokal,
+      daftarJadwal, daftarJadwalTetap, daftarJadwalGiliran, daftarKelasGabungan,
+      daftarMapel, daftarRombel, daftarTingkat, daftarPiket, daftarGuru, daftarLembaga
+    })
+  }
+
+  // Unduh jadwal SATU kelas sebagai file PDF
+  const handleDownloadSatuKelas = async (rombel: any, aksi: 'unduh' | 'preview' = 'unduh') => {
+    setSedangMengunduhKelas(true)
+    setProgresUnduhKelas({ selesai: 0, total: 1 })
+    try {
+      const html = buatHtmlJadwalSatuKelas(rombel)
+      const blobMentah = await renderHtmlKePdfBlob(html, 'portrait')
+      const namaFile = `Jadwal Kelas ${namaFileAman(rombel.nama)}.pdf`
+      const blob = new File([blobMentah], namaFile, { type: 'application/pdf' })
+      const url = URL.createObjectURL(blob)
+      if (aksi === 'preview') {
+        if (previewRef.current) URL.revokeObjectURL(previewRef.current)
+        previewRef.current = url
+        setPreviewJudul('Pratinjau Jadwal Kelas')
+        setPreviewUrl(url)
+        setProgresUnduhKelas({ selesai: 1, total: 1 })
+        return
+      }
+      const a = document.createElement('a')
+      a.href = url
+      a.download = namaFile
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      setProgresUnduhKelas({ selesai: 1, total: 1 })
+    } catch (err) {
+      console.error(err)
+      alert('Gagal membuat PDF jadwal kelas. Pastikan package "jspdf" dan "html2canvas" sudah terpasang (npm install jspdf html2canvas).')
+    } finally {
+      setSedangMengunduhKelas(false)
+    }
+  }
+
+  // Unduh jadwal SEMUA kelas sekaligus, dibungkus dalam satu file ZIP (satu PDF per kelas di dalamnya)
+  const handleDownloadSemuaKelasZip = async () => {
+    const daftarKelasUrut = urutkanRombelKelas(daftarRombel)
+    if (!daftarKelasUrut.length) { alert('Belum ada data kelas.'); return }
+    setSedangMengunduhKelas(true)
+    setProgresUnduhKelas({ selesai: 0, total: daftarKelasUrut.length })
+    try {
+      const { default: JSZip } = await import('jszip')
+      const zip = new JSZip()
+
+      for (let i = 0; i < daftarKelasUrut.length; i++) {
+        const rombel = daftarKelasUrut[i]
+        const html = buatHtmlJadwalSatuKelas(rombel)
+        const blob = await renderHtmlKePdfBlob(html, 'portrait')
+        zip.file(`Jadwal Kelas ${namaFileAman(rombel.nama)}.pdf`, blob)
+        setProgresUnduhKelas({ selesai: i + 1, total: daftarKelasUrut.length })
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(zipBlob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Jadwal Semua Kelas - ${namaFileAman(identitasInduk.nama || 'Lembaga')}.zip`
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error(err)
+      alert('Gagal membuat ZIP jadwal kelas. Pastikan package "jszip", "jspdf", dan "html2canvas" sudah terpasang (npm install jszip jspdf html2canvas).')
+    } finally {
+      setSedangMengunduhKelas(false)
+    }
+  }
+
+  // Dipanggil dari tombol "Unduh" pada modal: arahkan ke unduhan satu kelas atau ZIP semua, sesuai pilihan.
+  const handleProsesDownloadKelas = async () => {
+    if (kelasDownloadTarget === 'semua-zip') {
+      await handleDownloadSemuaKelasZip()
+    } else {
+      const rombel = daftarRombel.find(r => r.id === kelasDownloadTarget)
+      if (rombel) await handleDownloadSatuKelas(rombel)
+    }
+    setShowDownloadKelasModal(false)
+  }
+
+  const handleProsesPreviewKelas = async () => {
+    if (kelasDownloadTarget === 'semua-zip') return // ZIP berisi banyak file, tidak bisa dipratinjau sebagai satu dokumen
+    const rombel = daftarRombel.find(r => r.id === kelasDownloadTarget)
+    if (rombel) await handleDownloadSatuKelas(rombel, 'preview')
   }
 
   // ============================================================
@@ -2972,9 +3364,10 @@ export default function JadwalPelajaranPage() {
               ['pengaturan_kelas', '2. Pengaturan'],
               ['input', '3. Plot Matriks'],
               ['rekap_guru', '4. Rekap Guru'],
-              ['rekap_jadwal', '5. Rekap Jadwal'],
+              ['rekap_kelas', '5. Rekap Kelas'],
+              ['rekap_jadwal', '6. Rekap Jadwal'],
             ] as [typeof tabView, string][])
-              .filter(([key]) => bolehEdit || key === 'rekap_guru' || key === 'rekap_jadwal')
+              .filter(([key]) => bolehEdit || key === 'rekap_guru' || key === 'rekap_kelas' || key === 'rekap_jadwal')
               .map(([key, label]) => (
               <button key={key} onClick={() => setTabView(key)} className={`flex-1 py-2 text-center text-xs font-bold rounded-lg transition ${tabView === key ? 'bg-[#6A197D] text-white shadow' : 'text-slate-600 hover:bg-slate-50'}`}>{label}</button>
             ))}
@@ -4306,6 +4699,82 @@ export default function JadwalPelajaranPage() {
         )}
 
         {/* =========================================================
+            TAB: REKAP KELAS
+        ========================================================= */}
+        {tabView === 'rekap_kelas' && (
+          <section className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
+            <div className="flex items-center justify-between gap-4 border-b border-slate-100 pb-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-[#6A197D]" />
+                <h2 className="font-bold text-slate-800 text-sm">Unduh Jadwal Per Kelas</h2>
+              </div>
+              <button
+                onClick={() => { setKelasDownloadTarget('semua-zip'); setShowDownloadKelasModal(true) }}
+                className="flex items-center gap-2 bg-[#6A197D] hover:bg-[#571466] text-white px-4 py-2.5 rounded-xl font-bold text-xs shadow-md transition"
+              >
+                <Download className="w-4 h-4" /> Unduh Jadwal Per Kelas (PDF)
+              </button>
+            </div>
+            <div className="md:w-1/3">
+              <select value={cariKelasId} onChange={e => setCariKelasId(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
+                <option value="">🔍 Semua kelas</option>
+                {urutkanRombelKelas(daftarRombel).map(r => <option key={r.id} value={r.id}>{r.nama}</option>)}
+              </select>
+            </div>
+            <div className="overflow-x-auto border border-slate-200 rounded-xl max-h-[500px] overflow-y-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead className="sticky top-0 z-30">
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-extrabold">
+                    <th className="p-4 sticky left-0 z-20 bg-slate-50 border-r border-slate-200 min-w-[140px]">Kelas</th>
+                    <th className="p-4">Mapel Diajarkan</th>
+                    <th className="p-4 text-center">Unduh</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {urutkanRombelKelas(daftarRombel).filter(r => !cariKelasId || r.id === cariKelasId).map(r => {
+                    const mapelIdSet = new Set<string>()
+                    daftarJadwal.filter(j => j.rombelId === r.id).forEach(j => mapelIdSet.add(j.mapelId))
+                    daftarJadwalTetap.filter(jt => jt.jenis === 'mapel' && jt.berlakuUntuk === 'rombel' && jt.rombelIds?.includes(r.id)).forEach(jt => { if (jt.mapelId) mapelIdSet.add(jt.mapelId) })
+                    const daftarMapelKelas = Array.from(mapelIdSet).map(mId => daftarMapel.find(m => m.id === mId)).filter(Boolean)
+                    return (
+                      <tr key={r.id} className="hover:bg-slate-50/70 group">
+                        <td className="p-4 text-sm font-black text-slate-800 sticky left-0 z-10 bg-white border-r border-slate-200 group-hover:bg-slate-50/70">{r.nama}</td>
+                        <td className="p-4">
+                          <ul className="list-disc pl-3 text-[#571466]">
+                            {daftarMapelKelas.map((m: any) => <li key={m.id}>{m.nama}</li>)}
+                          </ul>
+                        </td>
+                        <td className="p-4 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => handleDownloadSatuKelas(r, 'preview')}
+                              disabled={sedangMengunduhKelas}
+                              title="Pratinjau jadwal kelas ini"
+                              className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDownloadSatuKelas(r)}
+                              disabled={sedangMengunduhKelas}
+                              title="Unduh PDF jadwal kelas ini"
+                              className="p-2 text-[#8A2FA0] hover:text-[#571466] hover:bg-[#F7ECFA] rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <Download className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {!daftarRombel.length && <tr><td colSpan={3} className="py-12 text-center text-slate-400 text-xs">Belum ada data kelas.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* =========================================================
             TAB 5: REKAP JADWAL
         ========================================================= */}
         {tabView === 'rekap_jadwal' && (
@@ -4536,7 +5005,78 @@ export default function JadwalPelajaranPage() {
           </div>
         </div>
       )}
-      <PratinjauPdfModal url={previewUrl} onClose={() => setPreviewUrl(null)} judul="Pratinjau Jadwal Guru" />
+
+      {/* =========================================================
+          MODAL DOWNLOAD PER-KELAS (PDF satu-satu / ZIP semua)
+      ========================================================= */}
+      {showDownloadKelasModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h2 className="font-black text-slate-800 text-lg flex items-center gap-2"><Download className="w-5 h-5 text-[#6A197D]" /> Unduh Jadwal Per Kelas</h2>
+              <button onClick={() => !sedangMengunduhKelas && setShowDownloadKelasModal(false)} className="p-2 text-slate-400 hover:text-slate-600 rounded-lg"><X className="w-4 h-4" /></button>
+            </div>
+            <p className="text-xs text-slate-500">Format mengikuti template "Jadwal Kelas" (potret/portrait, tanpa kop/logo — kop hanya dipakai pada jadwal keseluruhan, tabel hari × jam, jadwal piket dan kontak piket). File diunduh sebagai PDF.</p>
+
+            {!sedangMengunduhKelas ? (
+              <>
+                <div>
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2 block">Pilih Cakupan</label>
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    <label className="flex items-center gap-3 p-3 border rounded-xl cursor-pointer hover:bg-slate-50 transition">
+                      <input type="radio" name="dlk" value="semua-zip" checked={kelasDownloadTarget === 'semua-zip'} onChange={() => setKelasDownloadTarget('semua-zip')} className="accent-[#6A197D]" />
+                      <div>
+                        <p className="font-bold text-sm text-slate-800">Semua Kelas (ZIP)</p>
+                        <p className="text-[10px] text-slate-500">Satu file ZIP berisi PDF jadwal untuk setiap kelas ({daftarRombel.length} kelas).</p>
+                      </div>
+                    </label>
+                    {urutkanRombelKelas(daftarRombel).map(r => (
+                      <label key={r.id} className="flex items-center gap-3 p-3 border rounded-xl cursor-pointer hover:bg-slate-50 transition">
+                        <input type="radio" name="dlk" value={r.id} checked={kelasDownloadTarget === r.id} onChange={() => setKelasDownloadTarget(r.id)} className="accent-[#6A197D]" />
+                        <div>
+                          <p className="font-bold text-sm text-slate-800">{r.nama}</p>
+                          <p className="text-[10px] text-slate-500">Unduh PDF jadwal kelas ini saja.</p>
+                        </div>
+                      </label>
+                    ))}
+                    {!daftarRombel.length && <p className="text-[10px] text-slate-400 italic p-3">Belum ada data kelas.</p>}
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  {kelasDownloadTarget !== 'semua-zip' && (
+                    <button onClick={handleProsesPreviewKelas} disabled={!daftarRombel.length} title="Pratinjau sebelum unduh"
+                      className="px-4 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition disabled:opacity-40 disabled:cursor-not-allowed">
+                      <Eye className="w-4 h-4" />
+                    </button>
+                  )}
+                  <button onClick={handleProsesDownloadKelas} disabled={!daftarRombel.length} className="flex-1 bg-[#6A197D] hover:bg-[#571466] text-white py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-md transition disabled:opacity-40 disabled:cursor-not-allowed">
+                    <Download className="w-4 h-4" /> Unduh
+                  </button>
+                  <button onClick={() => setShowDownloadKelasModal(false)} className="px-5 bg-slate-100 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-200 transition">Batal</button>
+                </div>
+              </>
+            ) : (
+              <div className="py-6 space-y-3">
+                <div className="flex items-center justify-center">
+                  <RotateCcw className="w-6 h-6 text-[#8A2FA0] animate-spin" />
+                </div>
+                <p className="text-center text-xs font-bold text-slate-700">
+                  Membuat PDF... {progresUnduhKelas.selesai} / {progresUnduhKelas.total}
+                </p>
+                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-[#6A197D] h-2 rounded-full transition-all"
+                    style={{ width: `${progresUnduhKelas.total > 0 ? (progresUnduhKelas.selesai / progresUnduhKelas.total) * 100 : 0}%` }}
+                  />
+                </div>
+                <p className="text-center text-[10px] text-slate-400">Mohon tunggu, jangan tutup jendela ini.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      <PratinjauPdfModal url={previewUrl} onClose={() => setPreviewUrl(null)} judul={previewJudul} />
     </div>
   )
 }
