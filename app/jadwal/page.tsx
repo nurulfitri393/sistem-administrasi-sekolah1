@@ -345,94 +345,161 @@ function generatePrintHtml(p: {
   }
 
   // === Header kolom: Hari -> Rombel ===
-  // Warna kolom diselang-seling per hari (putih / ungu soft) supaya di tabel
-  // lebar yang menampilkan banyak hari sekaligus, tiap hari mudah dibedakan
-  // sekilas tanpa harus membaca ulang label header tiap kali.
+  // Baris HEADER tetap warna ungu (#EDE3F3) seluruhnya untuk semua hari --
+  // hanya baris ISI jadwal di bawahnya yang warnanya diselang-seling per
+  // hari (putih / ungu soft), supaya tiap hari mudah dibedakan sekilas tanpa
+  // harus membaca ulang label header tiap kali.
   const WARNA_HARI_SOFT: Record<string, string> = { 'Senin': '#fff', 'Selasa': '#EDE3F3', 'Rabu': '#fff', 'Kamis': '#EDE3F3', 'Jumat': '#fff' }
   const warnaHari = (hari: string) => WARNA_HARI_SOFT[hari] || '#fff'
 
   const thHari = hariList.map(h =>
-    `<th colspan="${rombelFiltered.length}" style="padding:4px 2px;font-size:9px;text-align:center;background:${warnaHari(h)};color:#1E0A28;border:1px solid #000">${h.toUpperCase()}</th>`
+    `<th colspan="${rombelFiltered.length}" style="padding:4px 2px;font-size:9px;text-align:center;background:#EDE3F3;color:#1E0A28;border:1px solid #000">${h.toUpperCase()}</th>`
   ).join('')
-  const thRombel = hariList.map(h =>
-    rombelFiltered.map((r: any) => `<th style="padding:3px 2px;font-size:8px;text-align:center;background:${warnaHari(h)};color:#1E0A28;border:1px solid #000">${r.nama}</th>`).join('')
+  const thRombel = hariList.map(() =>
+    rombelFiltered.map((r: any) => `<th style="padding:3px 2px;font-size:8px;text-align:center;background:#EDE3F3;color:#1E0A28;border:1px solid #000">${r.nama}</th>`).join('')
   ).join('')
 
-  let istirahatIdx = 0
-  const rowsHtml = allSlots.map(slot => {
+  // ── Kelompokkan slot menjadi "blok": rangkaian slot mapel yang berurutan
+  //    TANPA jeda istirahat di antaranya, diselingi baris istirahat/sholat
+  //    sebagai baris tersendiri (colspan penuh). Penggabungan antar baris
+  //    (rowspan, sesuai jumlah JP) hanya boleh terjadi di DALAM satu blok --
+  //    tidak pernah melompati baris istirahat.
+  type BlokBaris = { jenis: 'blok'; slots: WaktuSlot[] } | { jenis: 'istirahat'; slot: WaktuSlot }
+  const blokList: BlokBaris[] = []
+  let bufferBlok: WaktuSlot[] = []
+  allSlots.forEach(slot => {
     if (slot.jenis === 'istirahat') {
+      if (bufferBlok.length) { blokList.push({ jenis: 'blok', slots: bufferBlok }); bufferBlok = [] }
+      blokList.push({ jenis: 'istirahat', slot })
+    } else {
+      bufferBlok.push(slot)
+    }
+  })
+  if (bufferBlok.length) blokList.push({ jenis: 'blok', slots: bufferBlok })
+
+  let istirahatIdx = 0
+  const rowsHtml = blokList.map(blok => {
+    if (blok.jenis === 'istirahat') {
       istirahatIdx++
+      const slot = blok.slot
       const totalColsTanpaWaktu = hariList.length * rombelFiltered.length
-      const tdWaktuIstirahat = `<td style="padding:3px 4px;font-size:7.5px;font-weight:700;background:#f1f5f9;border:1px solid #000;word-break:break-word;text-align:center">${slot.mulai} - ${slot.selesai}</td>`
       // Pakai label ASLI yang diisi admin di Master Waktu (mis. "Istirahat Sholat
       // dan Makan Siang"), BUKAN teks generik "ISTIRAHAT N" -- supaya hasil
       // unduhan selalu sama persis dengan yang tertulis di halaman Jadwal.
       const labelIstirahat = (slot.label || '').trim() || `ISTIRAHAT ${istirahatIdx}`
       return `<tr style="background:#cbd5e1"><td style="padding:3px 4px;font-size:7.5px;font-weight:700;background:#f1f5f9;border:1px solid #000;word-break:break-word;text-align:center">${slot.mulai} - ${slot.selesai}</td><td colspan="${totalColsTanpaWaktu}" style="padding:3px 8px;font-size:8px;font-weight:700;text-align:center;border:1px solid #000;color:#000">${labelIstirahat.toUpperCase()}</td></tr>`
     }
-    const tdWaktu = `<td style="padding:3px 4px;font-size:7.5px;font-weight:700;background:#f1f5f9;border:1px solid #000;word-break:break-word;text-align:center">${slot.mulai} - ${slot.selesai}</td>`
-    const tdCells = hariList.map(hari => {
-      // Ambil cell untuk seluruh rombel pada hari ini dulu, supaya bisa dikelompokkan:
-      // kolom-kolom kelas yang BERURUTAN dan punya jadwal TETAP yang sama (mis. Upacara
-      // utk semua kelas) ATAU kelas GABUNGAN yang sama (mapel+guru sama) digabung jadi
-      // satu sel (colspan), supaya tulisannya tidak diulang-ulang per kelas.
-      const cellsHariIni = rombelFiltered.map((r: any) => getCell(hari, slot.id, r.id))
 
-      type Grup = { cell: any; jumlahKolom: number }
-      const grupList: Grup[] = []
-      let i = 0
-      while (i < cellsHariIni.length) {
-        const c = cellsHariIni[i]
-        if (c && (c.tipe === 'tetap' || c.tipe === 'gabungan')) {
-          let j = i + 1
-          while (
-            j < cellsHariIni.length &&
-            cellsHariIni[j] &&
-            cellsHariIni[j]!.tipe === c.tipe &&
-            (c.tipe === 'tetap' ? cellsHariIni[j]!.tetapId === c.tetapId : (cellsHariIni[j]!.label === c.label && cellsHariIni[j]!.sub === c.sub))
-          ) j++
-          grupList.push({ cell: c, jumlahKolom: j - i })
-          i = j
-        } else {
-          grupList.push({ cell: c, jumlahKolom: 1 })
-          i++
+    const slotsBlok = blok.slots
+    const jumlahBaris = slotsBlok.length
+
+    type GrupSel = { cell: any; jumlahKolom: number; colStart: number; rowSpan: number; skip: boolean }
+
+    // Baris per-hari di dalam blok ini: barisPerHari[hari][rowIdx] = daftar
+    // grup horizontal (hasil penggabungan kolom kelas, mis. Upacara/kelas
+    // gabungan) pada baris tsb -- logika grouping horizontalnya SAMA seperti
+    // sebelumnya, cuma disimpan dulu sbg data (bukan langsung jadi string)
+    // supaya bisa diproses lagi utk penggabungan vertikal (rowspan).
+    const barisPerHari: Record<string, GrupSel[][]> = {}
+    hariList.forEach(hari => {
+      barisPerHari[hari] = slotsBlok.map(slot => {
+        // Ambil cell untuk seluruh rombel pada hari ini dulu, supaya bisa dikelompokkan:
+        // kolom-kolom kelas yang BERURUTAN dan punya jadwal TETAP yang sama (mis. Upacara
+        // utk semua kelas) ATAU kelas GABUNGAN yang sama (mapel+guru sama) digabung jadi
+        // satu sel (colspan), supaya tulisannya tidak diulang-ulang per kelas.
+        const cellsHariIni = rombelFiltered.map((r: any) => getCell(hari, slot.id, r.id))
+        const grupList: GrupSel[] = []
+        let i = 0
+        while (i < cellsHariIni.length) {
+          const c = cellsHariIni[i]
+          if (c && (c.tipe === 'tetap' || c.tipe === 'gabungan')) {
+            let j = i + 1
+            while (
+              j < cellsHariIni.length &&
+              cellsHariIni[j] &&
+              cellsHariIni[j]!.tipe === c.tipe &&
+              (c.tipe === 'tetap' ? cellsHariIni[j]!.tetapId === c.tetapId : (cellsHariIni[j]!.label === c.label && cellsHariIni[j]!.sub === c.sub))
+            ) j++
+            grupList.push({ cell: c, jumlahKolom: j - i, colStart: i, rowSpan: 1, skip: false })
+            i = j
+          } else {
+            grupList.push({ cell: c, jumlahKolom: 1, colStart: i, rowSpan: 1, skip: false })
+            i++
+          }
+        }
+        return grupList
+      })
+
+      // ── Gabungkan antar baris (rowspan) sesuai jumlah JP: kalau mata
+      //    pelajaran yang PERSIS SAMA (kelas & guru sama) muncul berturut-
+      //    turut di baris-baris di bawahnya pada kolom yang sama, satukan
+      //    jadi satu sel dengan rowspan (mis. Matematika 2 JP -> 2 baris
+      //    digabung). HANYA berlaku utk mapel biasa ('normal') & kelas
+      //    gabungan ('gabungan') -- jadwal tetap/kegiatan ('tetap', mis.
+      //    Upacara) & jadwal bergiliran ('giliran') sengaja TIDAK digabung
+      //    baris supaya tidak menyamarkan perbedaan antar baris.
+      const bisaGabungVertikal = (cell: any) => !!cell && (cell.tipe === 'normal' || cell.tipe === 'gabungan')
+      const samaKontenVertikal = (a: any, b: any) => !!a && !!b && a.tipe === b.tipe && a.label === b.label && a.sub === b.sub
+
+      const barisHari = barisPerHari[hari]
+      for (let rowIdx = 0; rowIdx < jumlahBaris; rowIdx++) {
+        for (const grup of barisHari[rowIdx]) {
+          if (grup.skip || !bisaGabungVertikal(grup.cell)) continue
+          let rowBerikut = rowIdx + 1
+          while (rowBerikut < jumlahBaris) {
+            const grupBerikut = barisHari[rowBerikut].find(g => g.colStart === grup.colStart && g.jumlahKolom === grup.jumlahKolom)
+            if (!grupBerikut || grupBerikut.skip || !samaKontenVertikal(grup.cell, grupBerikut.cell)) break
+            grupBerikut.skip = true
+            grup.rowSpan++
+            rowBerikut++
+          }
         }
       }
+    })
 
-      return grupList.map((g, gi) => {
-        const cell = g.cell
-        if (!cell) return `<td key="${gi}" style="padding:3px 2px;border:1px solid #000;text-align:center;font-size:7px;color:#94a3b8;background:${warnaHari(hari)}">-</td>`
+    return slotsBlok.map((slot, rowIdx) => {
+      const tdWaktu = `<td style="padding:3px 4px;font-size:7.5px;font-weight:700;background:#f1f5f9;border:1px solid #000;word-break:break-word;text-align:center">${slot.mulai} - ${slot.selesai}</td>`
+      const tdCells = hariList.map(hari => {
+        const grupBaris = barisPerHari[hari][rowIdx]
+        return grupBaris.map((g, gi) => {
+          // Sel yang sudah "diserap" rowspan dari baris di atasnya TIDAK
+          // dirender sama sekali -- itulah cara kerja rowspan di HTML.
+          if (g.skip) return ''
+          const cell = g.cell
+          const atribut = `${g.jumlahKolom > 1 ? ` colspan="${g.jumlahKolom}"` : ''}${g.rowSpan > 1 ? ` rowspan="${g.rowSpan}"` : ''}`
+          if (!cell) return `<td key="${gi}"${atribut} style="padding:3px 2px;border:1px solid #000;text-align:center;font-size:7px;color:#94a3b8;background:${warnaHari(hari)}">-</td>`
 
-        if (cell.tipe === 'tetap' && g.jumlahKolom > 1) {
-          return `<td colspan="${g.jumlahKolom}" style="padding:3px 4px;border:1px solid #000;text-align:center;background:#dbeafe;vertical-align:middle">
-            <span style="font-size:8px;font-weight:700;display:block;line-height:1.25;white-space:normal;word-break:break-word">${cell.label}</span>
+          if (cell.tipe === 'tetap' && g.jumlahKolom > 1) {
+            return `<td${atribut} style="padding:3px 4px;border:1px solid #000;text-align:center;background:#dbeafe;vertical-align:middle">
+              <span style="font-size:8px;font-weight:700;display:block;line-height:1.25;white-space:normal;word-break:break-word">${cell.label}</span>
+            </td>`
+          }
+
+          let bg = warnaHari(hari)
+          if (cell.tipe === 'tetap') bg = '#dbeafe'
+          if (cell.tipe === 'gabungan') bg = '#d1fae5'
+          if (cell.tipe === 'giliran') bg = '#ede9fe'
+          // Jadwal LEMBAGA PUSAT (tampilkanWakaKurikulum=false) memiliki banyak kelas sekaligus
+          // dalam satu tabel, sehingga nama mapel disingkat jadi kode agar kolom tidak melebar.
+          // Jadwal UNIT tetap menampilkan nama mapel lengkap.
+          let labelTampil = cell.label
+          if (!tampilkanWakaKurikulum && cell.tipe !== 'tetap') {
+            labelTampil = cell.tipe === 'giliran'
+              ? cell.label.split('/').map(generateKodeMapel).join('/')
+              : generateKodeMapel(cell.label)
+          }
+          // Catatan: nama guru SENGAJA tidak ditampilkan di sini -- sudah ada di tabel
+          // "Daftar Pengajar & Mapel (Kelas)" di bawah tabel jadwal, supaya baris tidak
+          // membengkak dan hasil cetak tetap muat rapi dalam satu halaman A4 landscape.
+          // Jika nama mapel panjang, biarkan turun ke baris baru (word-wrap) -- JANGAN
+          // dipaksakan tampil memanjang ke samping yang bisa merusak tata letak kolom.
+          return `<td${atribut} style="padding:3px 2px;border:1px solid #000;text-align:center;background:${bg};vertical-align:middle">
+            <span style="font-size:7.5px;font-weight:700;display:block;line-height:1.2;white-space:normal;word-break:break-word">${labelTampil}</span>
           </td>`
-        }
-
-        let bg = warnaHari(hari)
-        if (cell.tipe === 'tetap') bg = '#dbeafe'
-        if (cell.tipe === 'gabungan') bg = '#d1fae5'
-        if (cell.tipe === 'giliran') bg = '#ede9fe'
-        // Jadwal LEMBAGA PUSAT (tampilkanWakaKurikulum=false) memiliki banyak kelas sekaligus
-        // dalam satu tabel, sehingga nama mapel disingkat jadi kode agar kolom tidak melebar.
-        // Jadwal UNIT tetap menampilkan nama mapel lengkap.
-        let labelTampil = cell.label
-        if (!tampilkanWakaKurikulum && cell.tipe !== 'tetap') {
-          labelTampil = cell.tipe === 'giliran'
-            ? cell.label.split('/').map(generateKodeMapel).join('/')
-            : generateKodeMapel(cell.label)
-        }
-        // Catatan: nama guru SENGAJA tidak ditampilkan di sini -- sudah ada di tabel
-        // "Daftar Pengajar & Mapel (Kelas)" di bawah tabel jadwal, supaya baris tidak
-        // membengkak dan hasil cetak tetap muat rapi dalam satu halaman A4 landscape.
-        // Jika nama mapel panjang, biarkan turun ke baris baru (word-wrap) -- JANGAN
-        // dipaksakan tampil memanjang ke samping yang bisa merusak tata letak kolom.
-        return `<td${g.jumlahKolom > 1 ? ` colspan="${g.jumlahKolom}"` : ''} style="padding:3px 2px;border:1px solid #000;text-align:center;background:${bg};vertical-align:middle">
-          <span style="font-size:7.5px;font-weight:700;display:block;line-height:1.2;white-space:normal;word-break:break-word">${labelTampil}</span>
-        </td>`
+        }).join('')
       }).join('')
+      return `<tr>${tdWaktu}${tdCells}</tr>`
     }).join('')
-    return `<tr>${tdWaktu}${tdCells}</tr>`
   }).join('')
 
   // === Daftar Pengajar & Mapel (Kelas) - dua kolom seperti PDF asli ===
@@ -911,7 +978,7 @@ function generatePrintHtmlKelas(p: {
       if (tetap.jenis === 'mapel') {
         const mapelTetap = daftarMapel.find((m: any) => m.id === tetap.mapelId)
         const guruTetap = daftarGuru.find((g: any) => g.id === tetap.guruId)
-        return { label: mapelTetap?.kode || mapelTetap?.nama || tetap.nama, sub: guruTetap?.nama || '' }
+        return { label: mapelTetap?.nama || tetap.nama, sub: guruTetap?.nama || '' }
       }
       return { label: tetap.nama, sub: '' }
     }
@@ -925,7 +992,7 @@ function generatePrintHtmlKelas(p: {
     if (!j) return null
     const mapel = daftarMapel.find((m: any) => m.id === j.mapelId)
     const guru = daftarGuru.find((g: any) => g.id === j.guruId)
-    return { label: (mapel as any)?.kode || mapel?.nama || '-', sub: guru?.nama || '' }
+    return { label: mapel?.nama || '-', sub: guru?.nama || '' }
   }
 
   // ── Tabel jadwal utama (sama persis polanya dengan jadwal guru: segmen
