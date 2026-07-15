@@ -295,16 +295,27 @@ function generatePrintHtml(p: {
   } = p
 
   // Ambil daftar guru piket pada satu hari, sesuai cakupan:
-  // - Jadwal UNIT (piketUnitId terisi): hanya guru piket yang ditugaskan untuk unit tsb.
-  // - Jadwal KESELURUHAN (piketUnitId null/'semua'): gabungkan & hilangkan duplikat dari SEMUA unit.
-  const getPiketGuruIdsHari = (hari: string): string[] => {
+  // - Jadwal UNIT (piketUnitId terisi): hanya guru piket yang ditugaskan untuk unit tsb
+  //   (semua entrinya otomatis dari unit yang sama, jadi tidak perlu label unit).
+  // - Jadwal KESELURUHAN (piketUnitId null/'semua'): gabungkan & hilangkan duplikat dari
+  //   SEMUA unit -- setiap entri tetap membawa lembagaId aslinya supaya bisa dilabeli
+  //   "(SMP)"/"(SMA)" dengan benar sesuai penugasan piket itu sendiri (BUKAN ditebak dari
+  //   unit pendaftaran utama guru piketnya, yang bisa keliru kalau guru itu terdaftar di
+  //   lebih dari satu unit).
+  const getPiketHariGabungan = (hari: string): { guruId: string; lembagaId: string }[] => {
     if (piketUnitId && piketUnitId !== 'semua') {
       const entry = daftarPiket.find(pk => pk.hari === hari && pk.lembagaId === piketUnitId)
-      return entry ? entry.guruIds : []
+      return entry ? entry.guruIds.map(gid => ({ guruId: gid, lembagaId: piketUnitId })) : []
     }
-    const idSet = new Set<string>()
-    daftarPiket.filter(pk => pk.hari === hari).forEach(pk => pk.guruIds.forEach(gid => idSet.add(gid)))
-    return Array.from(idSet)
+    const dipakai = new Set<string>()
+    const hasil: { guruId: string; lembagaId: string }[] = []
+    daftarPiket.filter(pk => pk.hari === hari).forEach(pk => pk.guruIds.forEach(gid => {
+      const kunci = `${gid}__${pk.lembagaId}`
+      if (dipakai.has(kunci)) return
+      dipakai.add(kunci)
+      hasil.push({ guruId: gid, lembagaId: pk.lembagaId })
+    }))
+    return hasil
   }
 
   const getRombelLembagaId = (rombelId: string) => {
@@ -585,13 +596,27 @@ function generatePrintHtml(p: {
         </tr></thead>
         <tbody><tr>
           ${LIST_HARI.slice(0, 5).map(h => {
-            const guruIdsPiket = getPiketGuruIdsHari(h)
+            const entriesPiket = getPiketHariGabungan(h)
+            // Jadwal Keseluruhan (piketUnitId null/'semua') menggabungkan piket dari SEMUA
+            // unit sekaligus -- supaya tetap jelas siapa dari unit mana, tiap nama diberi
+            // label unit ("(SMP)"/"(SMA)") yang diambil dari lembagaId ASLI penugasan piket
+            // itu sendiri (bukan ditebak dari unit pendaftaran guru). Untuk unduhan per-unit
+            // (piketUnitId sudah spesifik), semua entrinya otomatis dari unit yang sama, jadi
+            // label tidak perlu ditampilkan lagi (sudah jelas dari konteks unduhannya).
+            const tampilkanLabelUnit = !piketUnitId || piketUnitId === 'semua'
             // PENTING: kalau id guru piket tidak ketemu di daftarGuru (mis. data guru
             // sudah dihapus/berubah), JANGAN diganti '-' per orang -- itu bikin muncul
             // baris "-" nyasar di antara nama guru yang valid. Cukup diabaikan/dilewati;
             // sel kolom baru ditampilkan '-' kalau memang tidak ada guru piket sama sekali.
-            const namaList = guruIdsPiket
-              .map(gid => daftarGuru.find((g: any) => g.id === gid)?.nama)
+            const namaList = entriesPiket
+              .map(entry => {
+                const nama = daftarGuru.find((g: any) => g.id === entry.guruId)?.nama
+                if (!nama) return null
+                if (!tampilkanLabelUnit) return nama
+                const unitNama = daftarLembaga.find((l: any) => l.id === entry.lembagaId)?.nama
+                const labelUnit = unitNama ? unitNama.trim().split(/\s+/)[0] : ''
+                return labelUnit ? `${nama} (${labelUnit})` : nama
+              })
               .filter((n): n is string => !!n)
             return `<td style="padding:3px 5px;font-size:7.5px;border:1px solid #000;vertical-align:top">${namaList.map(n => `<div>${n}</div>`).join('') || '-'}</td>`
           }).join('')}
@@ -860,33 +885,49 @@ function generatePrintHtmlGuru(p: {
   ).join('')
 
   // ── Tabel piket guru (dibuat lebih ringkas: huruf & jarak dalam sel diperkecil) ─
-  const getPiketGuruIdsHariGabungan = (hari: string): string[] => {
-    const idSet = new Set<string>()
-    daftarPiket.filter(pk => pk.hari === hari).forEach(pk => pk.guruIds.forEach(gid => idSet.add(gid)))
-    return Array.from(idSet)
+  // PENTING (soal ketercampuran unit): Rekap Guru MEMANG menampilkan piket
+  // dari SEMUA unit sekaligus (bukan dibatasi ke unit guru ini saja) --
+  // supaya guru tetap tahu kontak piket dari unit lain juga. Yang harus
+  // akurat adalah LABEL unitnya di belakang tiap nama ("(SMP)"/"(SMA)").
+  // Sebelumnya label itu diambil dari unit "pendaftaran utama" guru
+  // piketnya sendiri (unitIds[0]) -- BUKAN dari unit tempat penugasan piket
+  // itu sebenarnya -- sehingga guru piket SMA bisa saja salah tertulis
+  // "(SMP)" kalau kebetulan unit pendaftaran utamanya SMP. Sekarang label
+  // unit diambil langsung dari data piket itu sendiri (pk.lembagaId), yang
+  // memang sudah pasti benar sesuai penugasannya.
+  const getPiketHariGabungan = (hari: string): { guruId: string; lembagaId: string }[] => {
+    const dipakai = new Set<string>()
+    const hasil: { guruId: string; lembagaId: string }[] = []
+    daftarPiket
+      .filter(pk => pk.hari === hari)
+      .forEach(pk => pk.guruIds.forEach(gid => {
+        const kunci = `${gid}__${pk.lembagaId}`
+        if (dipakai.has(kunci)) return
+        dipakai.add(kunci)
+        hasil.push({ guruId: gid, lembagaId: pk.lembagaId })
+      }))
+    return hasil
   }
 
   const hariPiketGuruIni = LIST_HARI.filter(h => daftarPiket.some(pk => pk.hari === h && pk.guruIds.includes(guru.id)))
   const piketLabel = hariPiketGuruIni.length > 0 ? `Bertugas piket pada hari: <strong>${hariPiketGuruIni.join(', ')}</strong>` : ''
 
   const hariPiketKolom = LIST_HARI.slice(0, 5)
-  const piketGabunganPerHari = hariPiketKolom.map(h => getPiketGuruIdsHariGabungan(h))
-  const maxBarisPiket = Math.max(...piketGabunganPerHari.map(ids => ids.length), 1)
-  const namaUnitGuru = (guruObj: any): string => {
-    const uid = guruObj?.unitIds?.[0]
-    if (!uid) return ''
-    const unit = daftarLembaga.find((l: any) => l.id === uid)
+  const piketGabunganPerHari = hariPiketKolom.map(h => getPiketHariGabungan(h))
+  const maxBarisPiket = Math.max(...piketGabunganPerHari.map(entries => entries.length), 1)
+  const labelUnitDari = (lembagaId: string): string => {
+    const unit = daftarLembaga.find((l: any) => l.id === lembagaId)
     if (!unit?.nama) return ''
     // Ambil kata pertama nama unit sebagai label singkat, mis. "SMP Aisyiyah..." -> "SMP"
     return unit.nama.trim().split(/\s+/)[0]
   }
 
   const piketTableRows = Array.from({ length: maxBarisPiket }).map((_, rowIdx) => {
-    const cells = piketGabunganPerHari.map(ids => {
-      const gId = ids[rowIdx]
-      const guruPiket = gId ? daftarGuru.find((g: any) => g.id === gId) : null
+    const cells = piketGabunganPerHari.map(entries => {
+      const entry = entries[rowIdx]
+      const guruPiket = entry ? daftarGuru.find((g: any) => g.id === entry.guruId) : null
       const namaG = guruPiket?.nama || ''
-      const labelUnit = guruPiket ? namaUnitGuru(guruPiket) : ''
+      const labelUnit = entry ? labelUnitDari(entry.lembagaId) : ''
       return `<td style="padding:2px 4px ${JARAK_BAWAH}px 4px;font-size:13px;border:1px solid #000;text-align:center;vertical-align:middle;white-space:normal;word-break:break-word;line-height:1.3">${namaG}${labelUnit ? `<br/><span style="font-size:11px;color:#000">(${labelUnit})</span>` : ''}</td>`
     }).join('')
     return `<tr>${cells}</tr>`
