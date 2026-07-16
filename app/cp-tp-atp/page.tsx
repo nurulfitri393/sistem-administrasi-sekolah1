@@ -658,11 +658,14 @@ export default function CpTpAtpPage() {
       let judulDokumen = ''
       if (halaman === 'analisis') {
         // ═══════════════ ANALISIS CAPAIAN PEMBELAJARAN ═══════════════
-        // Satu baris per Lingkup Materi (bukan per CP). Elemen & Capaian Pembelajaran
-        // SENGAJA diulang di setiap baris (bukan digabung pakai rowSpan) -- rowSpan pada
-        // jspdf-autotable rusak kalau baris yang di-span itu terpotong ke halaman
-        // berikutnya (garis tabel & isi sel jadi hilang), jadi diulang saja per baris
-        // supaya border & isi selalu utuh walau tabelnya panjang lebih dari 1 halaman.
+        // Satu baris per Lingkup Materi (bukan per CP). Data mentahnya SELALU lengkap di
+        // setiap baris (tidak pakai rowSpan bawaan jspdf-autotable -- itu yang bikin garis
+        // & isi sel hilang kalau sel gabungan kepotong ke halaman lain). Efek "sel gabungan"
+        // (Elemen / Capaian Pembelajaran / Lingkup Materi yang sama tidak diulang teksnya)
+        // dibuat sendiri lewat hook willDrawCell di bawah: baris & garisnya tetap sungguhan
+        // (jadi border TIDAK PERNAH hilang), cuma teks yang identik dengan baris tepat di
+        // atasnya PADA HALAMAN YANG SAMA yang dikosongkan. Kalau kebetulan baris yang sama
+        // itu mulai di halaman baru, teksnya sengaja ditulis ulang supaya tetap ada konteks.
         judulDokumen = 'Analisis Capaian Pembelajaran'
         const y1 = tulisKopHalaman('ANALISIS CAPAIAN PEMBELAJARAN')
 
@@ -680,6 +683,11 @@ export default function CpTpAtpPage() {
             })
           })
         }
+
+        // Ingat nilai + nomor halaman baris SEBELUMNYA per kolom (0=Elemen, 1=Capaian
+        // Pembelajaran, 2=Lingkup Materi) -- direset otomatis tiap kali fungsi ini
+        // dipanggil ulang karena dideklarasikan di dalam handleDownloadPdf.
+        const barisSebelumnya: Record<number, { nilai: string; halaman: number } | null> = { 0: null, 1: null, 2: null }
 
         autoTable(doc, {
           startY: y1,
@@ -699,6 +707,19 @@ export default function CpTpAtpPage() {
             1: { cellWidth: contentWidth * 0.30 },
             2: { cellWidth: contentWidth * 0.20 },
             3: { cellWidth: contentWidth * 0.36 },
+          },
+          willDrawCell: (data: any) => {
+            if (data.section !== 'body' || data.column.index > 2) return
+            const nilai = String(data.cell.raw ?? '')
+            const sebelumnya = barisSebelumnya[data.column.index]
+            if (sebelumnya && sebelumnya.nilai === nilai && sebelumnya.halaman === data.pageNumber) {
+              data.cell.text = []
+              // Sembunyikan garis ATAS supaya menyatu dengan baris di atasnya (efek sel
+              // gabungan) -- garis kiri/kanan/bawah tetap normal, jadi kotak tabelnya
+              // tetap utuh walau teksnya kosong.
+              data.cell.styles.lineWidth = { top: 0, bottom: 0.15, left: 0.15, right: 0.15 }
+            }
+            barisSebelumnya[data.column.index] = { nilai, halaman: data.pageNumber }
           },
         })
       } else {
