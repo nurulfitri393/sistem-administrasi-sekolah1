@@ -122,7 +122,7 @@ interface Guru {
 }
 
 interface Mapel { id: string; nama: string; kode?: string }
-interface Rombel { id: string; nama: string; tingkat?: string; kelas?: string }
+interface Rombel { id: string; nama: string; tingkat?: string; kelas?: string; tingkatId?: string }
 
 interface SemesterInfo {
   id: string
@@ -239,21 +239,64 @@ function hitungTotalJp(strAlokasi: string): number {
     .reduce((a, b) => a + b, 0)
 }
 
-// Event kaldik berlaku untuk kelas/rombel tsb? SAMA PERSIS logikanya dengan
-// halaman Minggu Efektif (agendaBerlakuUntukScope, scope 'kelas') -- event
-// WAJIB menyertakan unit kelas ini di lembagaTerlibat, dan kalau event
-// menargetkan rombel/tingkat tertentu, kelas lain di luar target itu tidak
-// terdampak. Dipakai supaya JP efektif Prota/Promes SAMA PERSIS dengan
-// Analisis Alokasi Waktu, bukan ikut kegiatan yang sebetulnya milik kelas lain.
+// Event kaldik berlaku untuk kelas/rombel tsb? Kalau event menargetkan ROMBEL
+// atau TINGKAT tertentu secara eksplisit (dicentang di halaman Kaldik), itu
+// sinyal paling akurat dan dicek DULUAN -- tidak lagi disyaratkan lolos cek
+// lembagaTerlibat lebih dulu, karena id rombel/tingkat sudah unik & spesifik
+// (dan data lembagaTerlibat/Master Tingkat kadang tidak lengkap/tidak sinkron
+// -- kalau tetap disyaratkan, event yang sudah benar menyasar kelas tertentu
+// bisa gagal ke-scope hanya gara-gara field lembaga-nya tidak sinkron).
+// Field lembagaTerlibat HANYA dipakai sebagai fallback saat event tidak
+// menargetkan rombel/tingkat spesifik apapun (berlaku utk seluruh unit).
 function agendaBerlakuUntukKelas(ev: KaldikEvent, unitId: string, rombel?: { id: string; tingkatId: string }): boolean {
-  if (!ev.lembagaTerlibat?.includes(unitId)) return false
   if (ev.rombelTerlibat && ev.rombelTerlibat.length > 0) {
     return rombel ? ev.rombelTerlibat.includes(rombel.id) : false
   }
   if (ev.tingkatTerlibat && ev.tingkatTerlibat.length > 0) {
     return rombel ? ev.tingkatTerlibat.includes(rombel.tingkatId) : false
   }
-  return true
+  return !!ev.lembagaTerlibat?.includes(unitId)
+}
+
+/** Cari rombel lain di TINGKAT yang sama yang jadwalnya (himpunan hari mengajar guru+mapel
+ *  ini) PERSIS SAMA dengan rombel terpilih -- dipakai supaya Analisis Alokasi Waktu, Prota
+ *  & Promes cukup dibuat SATU dokumen gabungan kalau beberapa kelas sejenjang benar-benar
+ *  diajar di hari yang sama persis (mis. 1A & 1B sama-sama Rabu), dan tetap dipisah kalau
+ *  himpunan harinya beda walau SEBAGIAN hari kebetulan sama (mis. 2A Senin+Kamis vs
+ *  2B Senin+Rabu -- sama-sama Senin tapi pertemuan ke-2 beda hari, jadi TIDAK digabung).
+ *  Hasil selalu memuat rombel terpilih sendiri, terurut alfabetis. */
+function cariRombelSejadwal(
+  guruId: string,
+  mapelId: string,
+  rombelId: string,
+  daftarRombel: Rombel[],
+  daftarJadwal: { guruId: string; mapelId: string; rombelId: string; hari: string }[],
+): Rombel[] {
+  const rombel = daftarRombel.find(r => r.id === rombelId)
+  if (!rombel) return []
+  if (!guruId || !mapelId) return [rombel]
+
+  const hariSet = (rid: string): Set<string> => new Set(
+    daftarJadwal.filter(j => j.guruId === guruId && j.mapelId === mapelId && j.rombelId === rid).map(j => j.hari)
+  )
+  const hariSama = (a: Set<string>, b: Set<string>): boolean =>
+    a.size > 0 && a.size === b.size && [...a].every(h => b.has(h))
+
+  const hariRombelIni = hariSet(rombelId)
+  if (hariRombelIni.size === 0) return [rombel]
+
+  const kandidat = rombel.tingkatId ? daftarRombel.filter(r => r.tingkatId === rombel.tingkatId) : [rombel]
+  const gabungan = kandidat.filter(r => r.id === rombelId || hariSama(hariSet(r.id), hariRombelIni))
+  gabungan.sort((a, b) => a.nama.localeCompare(b.nama))
+  return gabungan
+}
+
+/** Gabungkan nama-nama rombel jadi satu label: "1A" / "1A dan 1B" / "1A, 1B, dan 1C". */
+function labelKelasGabungan(rombelList: Rombel[]): string {
+  const nama = rombelList.map(r => r.nama).filter(Boolean)
+  if (nama.length <= 1) return nama[0] || ''
+  if (nama.length === 2) return `${nama[0]} dan ${nama[1]}`
+  return `${nama.slice(0, -1).join(', ')}, dan ${nama[nama.length - 1]}`
 }
 
 /** Bangun set hari libur dari events kaldik -- HANYA yang berstatus 'libur'
@@ -281,13 +324,15 @@ interface MingguKapasitas {
   efektifLembaga: boolean   // status institusional (≤2 hari libur Sen-Jum)
   capacityJp: number        // JP riil yang bisa diajarkan minggu ini (dari jadwal, dikurangi hari libur)
   warnaKegiatan?: string    // warna klasifikasi kegiatan Kaldik yang paling banyak muncul minggu ini (kalau tidak efektif)
+  kegiatan?: string         // nama/keterangan kegiatan Kaldik yang membuat minggu ini tidak efektif
 }
 
-/** Bangun peta tanggal -> warna hex klasifikasi kegiatan, dari daftar event Kaldik
- *  + daftar klasifikasinya -- dipakai supaya warna minggu "tidak efektif" di Promes
- *  SAMA PERSIS dengan warna kegiatan yang tertulis di Kaldik, bukan abu-abu generik. */
-function buildWarnaKegiatanPerTanggal(events: KaldikEvent[], daftarKlasifikasi: KlasifikasiAgenda[]): Map<string, string> {
-  const map = new Map<string, string>()
+/** Bangun peta tanggal -> {warna, keterangan} kegiatan Kaldik, dari daftar event
+ *  + daftar klasifikasinya -- dipakai supaya warna DAN nama kegiatan minggu "tidak
+ *  efektif" di Promes SAMA PERSIS dengan yang tertulis di Kaldik, bukan abu-abu
+ *  generik tanpa keterangan. */
+function buildInfoKegiatanPerTanggal(events: KaldikEvent[], daftarKlasifikasi: KlasifikasiAgenda[]): Map<string, { warna: string; keterangan: string }> {
+  const map = new Map<string, { warna: string; keterangan: string }>()
   events.forEach(ev => {
     const mulai = ev.tanggalMulai || ev.tanggal
     const selesai = ev.tanggalSelesai || mulai
@@ -296,11 +341,39 @@ function buildWarnaKegiatanPerTanggal(events: KaldikEvent[], daftarKlasifikasi: 
     let cur = parseDate(mulai)
     const end = parseDate(selesai)
     while (cur <= end) {
-      map.set(toDateStr(cur), warna)
+      map.set(toDateStr(cur), { warna, keterangan: ev.keterangan })
       cur = addDays(cur, 1)
     }
   })
   return map
+}
+
+// Bulan "pemilik" sebuah minggu Senin-Jumat ditentukan oleh bulan tempat hari RABU jatuh
+// (konsisten dengan getBulanMingguFromSenin di halaman Minggu Efektif).
+function bulanPemilikMinggu(senin: Date): { tahun: number; bulan: number } {
+  const rabu = addDays(senin, 2)
+  return { tahun: rabu.getFullYear(), bulan: rabu.getMonth() }
+}
+
+/** Posisi minggu ke-N di dalam bulan (1..5), dihitung dari kalender bulan itu sendiri --
+ *  BUKAN dari urutan kemunculan minggu di dalam rentang semester. Ini penting supaya kalau
+ *  semester baru mulai di tengah bulan (mis. pertengahan Juli), minggu pertama yang benar-benar
+ *  masuk rentang semester tetap diberi label sesuai posisi kalendernya (mis. "minggu ke-3"),
+ *  bukan dipaksa jadi "minggu ke-1" -- yang akan membuat data (termasuk warna kegiatan Kaldik)
+ *  tergeser ke kolom yang salah dan kolom-kolom terakhir bulan itu jadi hitam keliru. */
+function mingguKeDalamBulan(senin: Date): number {
+  const target = bulanPemilikMinggu(senin)
+  let idx = 1
+  let cur = senin
+  for (;;) {
+    const prev = addDays(cur, -7)
+    const pemilik = bulanPemilikMinggu(prev)
+    if (pemilik.tahun === target.tahun && pemilik.bulan === target.bulan) {
+      idx++
+      cur = prev
+    } else break
+  }
+  return idx
 }
 
 /** Untuk Promes: hitung, per bulan dalam satu semester, status tiap minggu (efektif utk lembaga
@@ -311,7 +384,7 @@ function hitungMingguKapasitas(
   tanggalSelesai: string,
   hariLiburSet: Set<string>,
   jpPerHari: Record<number, number>,
-  warnaPerTanggal?: Map<string, string>,
+  infoPerTanggal?: Map<string, { warna: string; keterangan: string }>,
 ): Record<string, MingguKapasitas[]> {
   const mulai = parseDate(tanggalMulai)
   const selesai = parseDate(tanggalSelesai)
@@ -330,19 +403,26 @@ function hitungMingguKapasitas(
     }
     if (hariDlm.length > 0) {
       let hariLibur = 0
-      const warnaHitungan = new Map<string, number>()
+      // Dihitung per NAMA kegiatan (keterangan), bukan per warna -- supaya kalau ada
+      // dua kegiatan berbeda dengan warna sama, nama yang ditampilkan tetap kegiatan
+      // yang paling banyak menutupi hari-hari minggu itu.
+      const kegiatanHitungan = new Map<string, { warna: string; count: number }>()
       hariDlm.forEach(h => {
         if (hariLiburSet.has(toDateStr(h))) {
           hariLibur++
-          const w = warnaPerTanggal?.get(toDateStr(h))
-          if (w) warnaHitungan.set(w, (warnaHitungan.get(w) || 0) + 1)
+          const info = infoPerTanggal?.get(toDateStr(h))
+          if (info) {
+            const cur = kegiatanHitungan.get(info.keterangan)
+            kegiatanHitungan.set(info.keterangan, { warna: info.warna, count: (cur?.count || 0) + 1 })
+          }
         }
       })
       const efektifLembaga = hariLibur <= 2
-      // Warna yang dipakai = klasifikasi kegiatan yang paling banyak muncul di minggu ini.
+      // Kegiatan yang dipakai (nama + warna) = kegiatan yang paling banyak muncul di minggu ini.
       let warnaKegiatan: string | undefined
+      let kegiatan: string | undefined
       let maxCount = 0
-      warnaHitungan.forEach((cnt, w) => { if (cnt > maxCount) { maxCount = cnt; warnaKegiatan = w } })
+      kegiatanHitungan.forEach((v, nama) => { if (v.count > maxCount) { maxCount = v.count; warnaKegiatan = v.warna; kegiatan = nama } })
 
       let capacityJp = 0
       Object.keys(jpPerHari).forEach(k => {
@@ -353,10 +433,10 @@ function hitungMingguKapasitas(
         }
       })
 
-      const tglRef = hariDlm[0]
-      const bulanKey = `${tglRef.getFullYear()}-${String(tglRef.getMonth() + 1).padStart(2, '0')}`
+      const pemilik = bulanPemilikMinggu(senin)
+      const bulanKey = `${pemilik.tahun}-${String(pemilik.bulan + 1).padStart(2, '0')}`
       if (!hasil[bulanKey]) hasil[bulanKey] = []
-      hasil[bulanKey].push({ mingguKe: hasil[bulanKey].length + 1, efektifLembaga, capacityJp, warnaKegiatan })
+      hasil[bulanKey].push({ mingguKe: mingguKeDalamBulan(senin), efektifLembaga, capacityJp, warnaKegiatan, kegiatan })
     }
     senin = addDays(senin, 7)
   }
@@ -543,9 +623,11 @@ async function eksporPromesExcel(params: {
       const list = weeksByBulan[bulanKey] || []
       for (let m = 1; m <= 5; m++) {
         const w = list.find(x => x.mingguKe === m)
+        if (!w) { row.push(null); continue }
+        const status = klasifikasiMinggu(w)
         const jp = alokasiMingguan[r.id]?.[`${bulanKey}::${m}`] || 0
         totalDialokasikan += jp
-        row.push(w ? (jp > 0 ? jp : null) : null)
+        row.push(status === 'hitam' ? (w.kegiatan || null) : (jp > 0 ? (status === 'abu' ? `${jp} Jp` : jp) : null))
       }
     })
     rowsOut.push(row)
@@ -857,14 +939,25 @@ async function eksporPromesPDF(params: {
         const status = klasifikasiMinggu(w)
         const jp = alokasiMingguan[r.id]?.[`${bulanKey}::${m}`] || 0
         totalDialokasikan += jp
-        // Minggu "abu" (tidak efektif utk lembaga, tapi masih ada jadwal
-        // mapel yg lolos) sekarang pakai warna KEGIATAN ASLI dari Kaldik
-        // (bukan abu-abu generik), supaya konsisten dengan kalender.
-        const bg = status === 'hitam' ? [30, 30, 30]
-          : status === 'abu' ? (w.warnaKegiatan ? hexKeRgb(w.warnaKegiatan) : [203, 213, 225])
+        // Minggu tidak efektif ("abu" ATAU "hitam") selalu pakai warna KEGIATAN ASLI
+        // dari Kaldik yang membuat minggu itu tidak efektif -- solid hitam pekat
+        // HANYA dipakai kalau memang tidak ada info warna kegiatan sama sekali.
+        // (Solid hitam untuk kolom minggu yang tidak ada sama sekali dalam rentang
+        // semester ditangani terpisah di cabang `!w` di atas.)
+        const bg = (status === 'hitam' || status === 'abu')
+          ? (w.warnaKegiatan ? hexKeRgb(w.warnaKegiatan) : [30, 30, 30])
           : [255, 255, 255]
         const fg = (status === 'hitam' || status === 'abu') ? [255, 255, 255] : [15, 23, 42]
-        row.push({ content: jp > 0 ? String(jp) : '', styles: { halign: 'center' as unknown as string, fillColor: bg as unknown as string, textColor: fg as unknown as string } })
+        // Sebaran jam pelajaran hanya ditulis di minggu yang benar-benar punya kapasitas
+        // mengajar (efektif utk mapel, "normal" ATAU "abu"). Minggu "abu" (lembaga tidak
+        // efektif tapi sebagian hari mengajar masih lolos) ditulis "X Jp" supaya jelas itu
+        // JP yang bisa dicapai minggu itu, bukan alokasi penuh. Minggu "hitam" (kapasitas
+        // 0 sama sekali) tidak diisi angka JP -- cukup nama kegiatan Kaldik yang membuat
+        // minggu itu tidak efektif.
+        const isiSel = status === 'hitam'
+          ? (w.kegiatan || '')
+          : (jp > 0 ? (status === 'abu' ? `${jp} Jp` : String(jp)) : '')
+        row.push({ content: isiSel, styles: { halign: 'center' as unknown as string, fillColor: bg as unknown as string, textColor: fg as unknown as string, fontSize: (status === 'hitam' || status === 'abu') ? 6 : 11 } })
       }
     })
     body.push(row)
@@ -899,7 +992,10 @@ async function eksporPromesPDF(params: {
   // TOTAL lebar tabel TIDAK PERNAH melebihi lebar halaman — sebelumnya kolom mingguan
   // (hingga 30 kolom × 8mm = 240mm) ditambah kolom tetap bisa jauh melebihi lebar
   // halaman landscape (±273mm), menyebabkan tabel terpotong / teks tumpang tindih.
-  const wNo = 8, wElemen = 24, wJp = 9
+  // No/Elemen-Materi/Jml(JP) dilebarkan supaya judul kolom & isinya tidak terpenggal
+  // (sebelumnya "Elemen/Materi" & "Jml (JP)" pecah huruf-per-huruf karena kolomnya
+  // terlalu sempit untuk fontSize 11).
+  const wNo = 10, wElemen = 32, wJp = 14
   const wTpTarget = 45
   const remainingForWeeks = contentWidth - (wNo + wElemen + wJp + wTpTarget)
   const wWeek = Math.max(4.2, remainingForWeeks / nWeekCols)
@@ -912,14 +1008,18 @@ async function eksporPromesPDF(params: {
 
   autoTable(doc, {
     startY: curY,
+    // theme 'plain' MATIKAN zebra-stripe bawaan jspdf-autotable (theme default
+    // 'striped' tetap memberi warna selang-seling walau bodyStyles.fillColor
+    // sudah diisi putih) -- badan tabel putih polos, ungu HANYA di header. Kolom
+    // minggu tetap bisa berwarna sendiri (warna kegiatan Kaldik) lewat styles per-sel.
+    theme: 'plain',
     head: [headRow1, headRow2],
     body,
-    headStyles: { font: 'times', fillColor: [237, 227, 243], textColor: [0, 0, 0], fontStyle: 'bold', fontSize: 11, halign: 'center', valign: 'middle', cellPadding: 2.8, lineColor: [0, 0, 0], lineWidth: 0.1 },
-    bodyStyles: { font: 'times', fontSize: 11, valign: 'middle', overflow: 'linebreak', cellPadding: 2.6, lineColor: [0, 0, 0], lineWidth: 0.1, textColor: [0, 0, 0] },
+    headStyles: { font: 'times', fillColor: [237, 227, 243], textColor: [0, 0, 0], fontStyle: 'bold', fontSize: 10, halign: 'center', valign: 'middle', cellPadding: 2.8, lineColor: [0, 0, 0], lineWidth: 0.1 },
+    bodyStyles: { font: 'times', fontSize: 11, valign: 'middle', overflow: 'linebreak', cellPadding: 2.6, lineColor: [0, 0, 0], lineWidth: 0.1, textColor: [0, 0, 0], fillColor: [255, 255, 255] },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     columnStyles: lebarKolom.reduce((acc: any, col, idx) => { acc[idx] = col; return acc }, {}),
     tableWidth: contentWidth,
-    alternateRowStyles: { fillColor: [250, 240, 253] },
     margin: { left: mL, right: mR },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didDrawPage: (data: any) => {
@@ -1156,24 +1256,52 @@ export default function ProtaPromesPage() {
   const tahunAjaran = semesterGanjil.tahunAjaran
 
   // Tingkat (master_tingkat) & unit (lembagaId) tempat rombel terpilih berada --
-  // dicocokkan lewat NAMA tingkat (pola yang sama dipakai filter Kelas per-Unit
-  // di form di bawah), karena Rombel di modul ini tidak menyimpan tingkatId.
+  // dicocokkan lewat tingkatId (field asli yang benar-benar disimpan di master_rombel,
+  // sama seperti halaman Jadwal & Minggu Efektif). Name-matching (tt.nama===r.tingkat)
+  // dipakai HANYA sbg fallback terakhir untuk data lama yang belum punya tingkatId --
+  // field "tingkat" (nama) pada Rombel umumnya TIDAK terisi oleh sumber data yang
+  // sebenarnya, jadi mengandalkannya sebagai jalur utama membuat resolusi unit gagal
+  // total (lihat catatan di agendaBerlakuUntukKelas).
   const tingkatRombelTerpilih = useMemo(
-    () => daftarTingkat.find((tt: any) => tt.nama === rombelTerpilih?.tingkat),
+    () => daftarTingkat.find((tt: any) => tt.id === rombelTerpilih?.tingkatId)
+      || daftarTingkat.find((tt: any) => tt.nama === rombelTerpilih?.tingkat),
     [daftarTingkat, rombelTerpilih]
   )
   const unitIdRombelTerpilih = tingkatRombelTerpilih?.lembagaId || ''
 
+  // Kelas lain di tingkat yang sama yang jadwalnya (utk guru+mapel terpilih) persis sama
+  // dengan kelas terpilih -- kalau ada, Analisis Alokasi Waktu/Prota/Promes ditampilkan
+  // GABUNGAN utk semua kelas itu sekaligus (satu dokumen, label "1A dan 1B"), bukan
+  // per-kelas terpisah, karena secara jadwal & kalender mereka memang identik.
+  const kelasGabunganTerpilih = useMemo(
+    () => cariRombelSejadwal(filterGuruId, filterMapelId, filterRombelId, daftarRombel, daftarJadwal),
+    [filterGuruId, filterMapelId, filterRombelId, daftarRombel, daftarJadwal]
+  )
+  const namaKelasTampil = labelKelasGabungan(kelasGabunganTerpilih.length > 0 ? kelasGabunganTerpilih : (rombelTerpilih ? [rombelTerpilih] : []))
+
   // Kaldik disaring khusus untuk kelas yang sedang dipilih (event yang hanya
   // menyasar kelas/unit lain TIDAK ikut memotong hari efektif kelas ini) --
   // supaya JP efektif di sini SAMA PERSIS dengan Analisis Alokasi Waktu.
+  // Kalau kelas terpilih digabung dg kelas lain (jadwal identik, lihat
+  // kelasGabunganTerpilih di atas), sebuah tanggal dianggap tidak efektif untuk
+  // GABUNGAN ini kalau event Kaldik-nya berlaku utk SALAH SATU anggota gabungan
+  // (union) -- bukan cuma kelas yang kebetulan dipilih duluan di dropdown.
+  // CATATAN: unitIdRombelTerpilih boleh gagal resolve (mis. Master Tingkat
+  // belum lengkap mengaitkan ke unit) -- itu HANYA memengaruhi event yang
+  // menyasar seluruh unit tanpa rombel/tingkat spesifik. Event yang sudah
+  // eksplisit menyasar rombel/tingkat (spt Fortasi yg dicentang ke rombel
+  // tertentu) tetap harus ke-scope dengan benar walau unit gagal resolve --
+  // makanya di sini TIDAK di-skip total hanya karena unitIdRombelTerpilih kosong.
   const eventsKaldikScopedKelas = useMemo(() => {
-    if (!filterRombelId || !unitIdRombelTerpilih) return []
-    return eventsKaldik.filter(ev => agendaBerlakuUntukKelas(ev, unitIdRombelTerpilih, rombelTerpilih ? { id: rombelTerpilih.id, tingkatId: tingkatRombelTerpilih?.id || '' } : undefined))
-  }, [eventsKaldik, filterRombelId, unitIdRombelTerpilih, rombelTerpilih, tingkatRombelTerpilih])
+    if (!filterRombelId) return []
+    const anggotaGabungan = kelasGabunganTerpilih.length > 0 ? kelasGabunganTerpilih : (rombelTerpilih ? [rombelTerpilih] : [])
+    return eventsKaldik.filter(ev => anggotaGabungan.some(r =>
+      agendaBerlakuUntukKelas(ev, unitIdRombelTerpilih, { id: r.id, tingkatId: tingkatRombelTerpilih?.id || '' })
+    ))
+  }, [eventsKaldik, filterRombelId, unitIdRombelTerpilih, rombelTerpilih, tingkatRombelTerpilih, kelasGabunganTerpilih])
 
   const hariLiburSet = useMemo(() => buildHariLiburSet(eventsKaldikScopedKelas), [eventsKaldikScopedKelas])
-  const warnaKegiatanPerTanggal = useMemo(() => buildWarnaKegiatanPerTanggal(eventsKaldikScopedKelas, daftarKlasifikasiKaldik), [eventsKaldikScopedKelas, daftarKlasifikasiKaldik])
+  const infoKegiatanPerTanggal = useMemo(() => buildInfoKegiatanPerTanggal(eventsKaldikScopedKelas, daftarKlasifikasiKaldik), [eventsKaldikScopedKelas, daftarKlasifikasiKaldik])
 
   // ── Baris Prota: gabungan CP + Materi + TP + ATP untuk mapel & tingkat kelas terpilih ──
   // INI PERBAIKAN UTAMA #1: sebelumnya membaca key 'data_analisis_atp' yang tidak pernah
@@ -1269,7 +1397,7 @@ export default function ProtaPromesPage() {
   function buildDataPromes(semester: 'ganjil' | 'genap') {
     const semInfo = semester === 'ganjil' ? semesterGanjil : semesterGenap
     const bulanList = semester === 'ganjil' ? BULAN_SEM1 : BULAN_SEM2
-    const weeksByBulan = hitungMingguKapasitas(semInfo.tanggalMulai, semInfo.tanggalSelesai, hariLiburSet, jpPerHari, warnaKegiatanPerTanggal)
+    const weeksByBulan = hitungMingguKapasitas(semInfo.tanggalMulai, semInfo.tanggalSelesai, hariLiburSet, jpPerHari, infoKegiatanPerTanggal)
 
     const [a, b] = tahunAjaran.split('/')
     const tahunAwal = parseInt(a), tahunAkhir = parseInt(b)
@@ -1311,7 +1439,7 @@ export default function ProtaPromesPage() {
         namaGuru: guruTerpilih?.nama || '',
         nuptk: guruTerpilih?.nip || '',
         namaMapel: mapelTerpilih?.nama || '',
-        namaKelas: rombelTerpilih?.nama || '',
+        namaKelas: namaKelasTampil || rombelTerpilih?.nama || '',
         tahunAjaran,
         rows: protaRowsFull,
         capJpSem1,
@@ -1350,16 +1478,17 @@ export default function ProtaPromesPage() {
     const d = buildDataPromes(semester)
     const { bulanList, weeksByBulan, rows, alokasi, getBulanKey, capJpEfektif, jpCadangan } = d
 
+    // Solid hitam sebagai fallback CSS class hanya dipakai kalau minggu tidak efektif
+    // itu tidak punya info warna kegiatan Kaldik sama sekali (lihat `gayaWarna` di bawah,
+    // yang mengutamakan warna kegiatan asli untuk status 'abu' MAUPUN 'hitam').
     const warnaSel = (status: StatusMinggu) =>
-      status === 'hitam' ? 'bg-slate-800 text-white'
-        : status === 'abu' ? 'bg-slate-300 text-slate-700'
-        : ''
+      status === 'hitam' || status === 'abu' ? 'bg-slate-800 text-white' : ''
 
     return (
       <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
         {filterGuruId && filterMapelId && filterRombelId && (
           <p className="text-[10px] text-slate-600 mb-2">
-            <strong>Mata Pelajaran:</strong> {mapelTerpilih?.nama} &nbsp;|&nbsp; <strong>Kelas:</strong> {rombelTerpilih?.nama} &nbsp;|&nbsp; <strong>Semester:</strong> {semester === 'ganjil' ? '1 (Ganjil)' : '2 (Genap)'} &nbsp;|&nbsp; <strong>Tahun Ajaran:</strong> {tahunAjaran} &nbsp;|&nbsp; <strong>Guru:</strong> {guruTerpilih?.nama}
+            <strong>Mata Pelajaran:</strong> {mapelTerpilih?.nama} &nbsp;|&nbsp; <strong>Kelas:</strong> {namaKelasTampil || rombelTerpilih?.nama} &nbsp;|&nbsp; <strong>Semester:</strong> {semester === 'ganjil' ? '1 (Ganjil)' : '2 (Genap)'} &nbsp;|&nbsp; <strong>Tahun Ajaran:</strong> {tahunAjaran} &nbsp;|&nbsp; <strong>Guru:</strong> {guruTerpilih?.nama}
           </p>
         )}
         <table className="text-[9px] border-collapse w-full min-w-[900px]">
@@ -1390,7 +1519,7 @@ export default function ProtaPromesPage() {
               </tr>
             ) : (
               rows.map((r, idx) => (
-                <tr key={r.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-[#6A197D]/12'}>
+                <tr key={r.id} className="bg-white">
                   <td className="border border-slate-200 p-1 text-center">{idx + 1}</td>
                   <td className="border border-slate-200 p-1 font-semibold text-[#6A197D]">{r.elemen}{r.materiNama ? ` — ${r.materiNama}` : ''}</td>
                   <td className="border border-slate-200 p-1">{r.tpNomor ? `${r.tpNomor} — ` : ''}{r.tpDeskripsi}</td>
@@ -1403,10 +1532,13 @@ export default function ProtaPromesPage() {
                       if (!w) return <td key={`${bln}-${m}`} className="border border-slate-200 p-1 bg-[#141414]" />
                       const status = klasifikasiMinggu(w)
                       const jp = alokasi[r.id]?.[`${bulanKey}::${m}`] || 0
-                      const gayaAbu = status === 'abu' && w.warnaKegiatan ? { backgroundColor: w.warnaKegiatan, color: '#fff' } : undefined
+                      const gayaWarna = (status === 'abu' || status === 'hitam') && w.warnaKegiatan ? { backgroundColor: w.warnaKegiatan, color: '#fff' } : undefined
+                      // Minggu "hitam" (kapasitas 0) tampilkan nama kegiatan Kaldik, bukan
+                      // angka JP. Minggu "abu" (masih ada kapasitas sebagian) tampilkan "X Jp".
+                      const isiSel = status === 'hitam' ? (w.kegiatan || '') : (jp > 0 ? (status === 'abu' ? `${jp} Jp` : jp) : '')
                       return (
-                        <td key={`${bln}-${m}`} style={gayaAbu} className={`border border-slate-200 p-1 text-center font-bold ${!gayaAbu ? warnaSel(status) : ''}`}>
-                          {jp > 0 ? jp : ''}
+                        <td key={`${bln}-${m}`} style={gayaWarna} className={`border border-slate-200 p-1 text-center font-bold ${!gayaWarna ? warnaSel(status) : ''} ${status === 'hitam' || status === 'abu' ? 'text-[7px] leading-tight' : ''}`}>
+                          {isiSel}
                         </td>
                       )
                     })
@@ -1872,7 +2004,7 @@ export default function ProtaPromesPage() {
               <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
                 {filterGuruId && filterMapelId && filterRombelId && (
                   <p className="text-[10px] text-slate-600 mb-2">
-                    <strong>Mata Pelajaran:</strong> {mapelTerpilih?.nama} &nbsp;|&nbsp; <strong>Kelas:</strong> {rombelTerpilih?.nama} &nbsp;|&nbsp; <strong>Tahun Ajaran:</strong> {tahunAjaran} &nbsp;|&nbsp; <strong>Guru:</strong> {guruTerpilih?.nama}
+                    <strong>Mata Pelajaran:</strong> {mapelTerpilih?.nama} &nbsp;|&nbsp; <strong>Kelas:</strong> {namaKelasTampil || rombelTerpilih?.nama} &nbsp;|&nbsp; <strong>Tahun Ajaran:</strong> {tahunAjaran} &nbsp;|&nbsp; <strong>Guru:</strong> {guruTerpilih?.nama}
                   </p>
                 )}
                 <table className="text-[9px] border-collapse w-full">

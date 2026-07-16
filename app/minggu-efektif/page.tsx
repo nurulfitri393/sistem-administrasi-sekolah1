@@ -183,6 +183,47 @@ function filterAgendaByScope(
   return agenda.filter(item => agendaBerlakuUntukScope(item, scope, unitId, rombel))
 }
 
+// Cari rombel lain di TINGKAT yang sama yang jadwalnya (himpunan hari mengajar guru+mapel
+// ini) PERSIS SAMA dengan rombel terpilih -- dipakai supaya Analisis Alokasi Waktu cukup
+// dibuat SATU dokumen gabungan kalau beberapa kelas sejenjang benar-benar diajar di hari
+// yang sama persis (mis. 1A & 1B sama-sama Rabu), dan tetap dipisah kalau himpunan harinya
+// beda walau SEBAGIAN hari kebetulan sama (mis. 2A Senin+Kamis vs 2B Senin+Rabu -- sama-sama
+// Senin tapi pertemuan ke-2 beda hari, jadi TIDAK digabung). Hasil selalu memuat rombel
+// terpilih sendiri, terurut alfabetis.
+function cariRombelSejadwal(
+  guruId: string,
+  mapelId: string,
+  rombelId: string,
+  daftarRombel: any[],
+  daftarJadwal: any[],
+): any[] {
+  const rombel = daftarRombel.find((r: any) => r.id === rombelId)
+  if (!rombel) return []
+  if (!guruId || !mapelId) return [rombel]
+
+  const hariSet = (rid: string): Set<string> => new Set(
+    daftarJadwal.filter((j: any) => j.guruId === guruId && j.mapelId === mapelId && j.rombelId === rid).map((j: any) => j.hari)
+  )
+  const hariSama = (a: Set<string>, b: Set<string>): boolean =>
+    a.size > 0 && a.size === b.size && [...a].every(h => b.has(h))
+
+  const hariRombelIni = hariSet(rombelId)
+  if (hariRombelIni.size === 0) return [rombel]
+
+  const kandidat = rombel.tingkatId ? daftarRombel.filter((r: any) => r.tingkatId === rombel.tingkatId) : [rombel]
+  const gabungan = kandidat.filter((r: any) => r.id === rombelId || hariSama(hariSet(r.id), hariRombelIni))
+  gabungan.sort((a: any, b: any) => (a.nama || '').localeCompare(b.nama || ''))
+  return gabungan
+}
+
+// Gabungkan nama-nama rombel jadi satu label: "1A" / "1A dan 1B" / "1A, 1B, dan 1C".
+function labelKelasGabungan(rombelList: any[]): string {
+  const nama = rombelList.map((r: any) => r.nama).filter(Boolean)
+  if (nama.length <= 1) return nama[0] || ''
+  if (nama.length === 2) return `${nama[0]} dan ${nama[1]}`
+  return `${nama.slice(0, -1).join(', ')}, dan ${nama[nama.length - 1]}`
+}
+
 // Membangun peta tanggal -> daftar kegiatan, HANYA dari item berstatus 'libur'.
 // Item berstatus 'efektif' (mis. MPLS, Ujian, dsb yang tetap KBM) TIDAK mengurangi
 // hari efektif, sesuai aturan: yang menentukan tidak-efektifnya sebuah hari adalah
@@ -854,10 +895,27 @@ export default function MingguEfektifPage() {
   const rombelMapelObj = daftarRombel.find((r: any) => r.id === filterRombelId)
   const unitIdRombelMapel = resolveUnitIdRombel(rombelMapelObj)
 
+  // Kelas lain di tingkat yang sama yang jadwalnya (utk guru+mapel terpilih) persis sama
+  // dengan kelas terpilih -- kalau ada, Analisis Alokasi Waktu ditampilkan GABUNGAN utk
+  // semua kelas itu sekaligus (satu dokumen, label "1A dan 1B"), bukan per-kelas terpisah.
+  const kelasGabunganMapel = useMemo(
+    () => cariRombelSejadwal(filterGuruId, filterMapelId, filterRombelId, daftarRombel, daftarJadwal),
+    [filterGuruId, filterMapelId, filterRombelId, daftarRombel, daftarJadwal]
+  )
+  const namaKelasTampilMapel = labelKelasGabungan(kelasGabunganMapel.length > 0 ? kelasGabunganMapel : (rombelMapelObj ? [rombelMapelObj] : []))
+
+  // Kalau kelas terpilih digabung dg kelas lain (jadwal identik), sebuah tanggal dianggap
+  // tidak efektif untuk GABUNGAN ini kalau event Kaldik-nya berlaku utk SALAH SATU anggota
+  // gabungan (union) -- bukan cuma kelas yang kebetulan dipilih duluan di dropdown.
   const agendaScopedMapel = useMemo(() => {
     if (!filterRombelId || !rombelMapelObj) return []
-    return filterAgendaByScope(daftarAgenda, 'kelas', unitIdRombelMapel, { id: rombelMapelObj.id, tingkatId: rombelMapelObj.tingkatId })
-  }, [daftarAgenda, filterRombelId, rombelMapelObj, unitIdRombelMapel])
+    const anggotaGabungan = kelasGabunganMapel.length > 0 ? kelasGabunganMapel : [rombelMapelObj]
+    const gabungan = new Set<AgendaItem>()
+    anggotaGabungan.forEach((r: any) => {
+      filterAgendaByScope(daftarAgenda, 'kelas', unitIdRombelMapel, { id: r.id, tingkatId: r.tingkatId }).forEach(ev => gabungan.add(ev))
+    })
+    return [...gabungan]
+  }, [daftarAgenda, filterRombelId, rombelMapelObj, unitIdRombelMapel, kelasGabunganMapel])
 
   const { liburSet: liburSetMapel, kegiatanPerTgl: kegiatanPerTglMapel } = useMemo(
     () => buildKaldikMaps(agendaScopedMapel),
@@ -1077,7 +1135,7 @@ export default function MingguEfektifPage() {
       namaGuru = daftarGuru.find((g: any) => g.id === filterGuruId)?.nama || ''
       nuptkGuru = daftarGuru.find((g: any) => g.id === filterGuruId)?.nip || ''
       namaMapelPdf = daftarMapel.find((m: any) => m.id === filterMapelId)?.nama || ''
-      namaRombelPdf = daftarRombel.find((r: any) => r.id === filterRombelId)?.nama || ''
+      namaRombelPdf = namaKelasTampilMapel || daftarRombel.find((r: any) => r.id === filterRombelId)?.nama || ''
       jpPerMingguPdf = jpPerMingguAktif
       cakupanLabel = `Kelas: ${namaRombelPdf} — Mapel: ${namaMapelPdf}`
     } else {
@@ -1437,7 +1495,7 @@ export default function MingguEfektifPage() {
                   )}
 
                   <KartuPerhitunganMingguJam
-                    title={`Perhitungan Minggu / Jam Efektif — Kelas ${daftarRombel.find(r => r.id === filterRombelId)?.nama || ''}${filterMapelId ? ` (${daftarMapel.find(m => m.id === filterMapelId)?.nama || ''})` : ''}`}
+                    title={`Perhitungan Minggu / Jam Efektif — Kelas ${namaKelasTampilMapel || daftarRombel.find(r => r.id === filterRombelId)?.nama || ''}${filterMapelId ? ` (${daftarMapel.find(m => m.id === filterMapelId)?.nama || ''})` : ''}`}
                     subtitle="Disaring dari Kaldik khusus untuk kelas ini — bisa berbeda dari tabel Lembaga di atas"
                     hasil={(filterGuruId && filterMapelId && hasilMapelTerkoreksi) ? hasilMapelTerkoreksi : hasilRombelMapel}
                     jpPerMinggu={jpPerMingguAktif}

@@ -4,7 +4,7 @@ import { bisaMengeditModul } from '@/lib/aksesPeran'
 import CatatanHanyaLihat from '@/components/CatatanHanyaLihat'
 
 import Sidebar from '@/components/Sidebar'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
 import { kunciTahun } from '@/lib/tahunAjaran'
@@ -13,7 +13,7 @@ import { useGoogleLogin } from '@react-oauth/google'
 import {
   CalendarDays, Home, ArrowLeft, Calendar, Plus, Trash2, RefreshCw,
   Tag, Edit2, Check, X, Download, Printer, FileText, ChevronDown,
-  Settings, Eye,
+  Settings, Eye, Upload, FileSpreadsheet,
 } from 'lucide-react'
 
 interface AgendaItem {
@@ -235,6 +235,132 @@ function tanggalDariNamaBulan(namaBulan: string, day: number): string {
 function rentangTanggalLabel(item: AgendaItem) {
   return formatRentangSingkat(item.tanggal, item.tanggalSelesai)
 }
+
+// ── Ringkasan tampilan Daftar Agenda (TIDAK mengubah data tersimpan) ──────────
+// Menggabungkan baris-baris agenda berurutan bertema sama (mis. "Renang kelas 1",
+// "Renang kelas 2", "Renang kelas 3" tanggal 7-9) jadi SATU baris ringkas di
+// tampilan saja. Data aslinya tetap tersimpan per-hari per-kelas -- penting supaya
+// perhitungan Analisis Alokasi Waktu/Prota/Promes (yang presisi per-tanggal per-kelas)
+// tidak terpengaruh sama sekali.
+function agendaSatuHari(it: AgendaItem): boolean {
+  return !it.tanggalSelesai || it.tanggalSelesai === it.tanggal
+}
+function tanggalBerikutnya(tgl: string): string {
+  const [y, m, d] = tgl.split('-').map(Number)
+  const n = new Date(y, m - 1, d + 1)
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`
+}
+function cakupanSama(a: AgendaItem, b: AgendaItem): boolean {
+  if (a.statusHari !== b.statusHari) return false
+  if (a.kategoriKlasifikasi !== b.kategoriKlasifikasi) return false
+  const la = [...(a.lembagaTerlibat || [])].sort(), lb = [...(b.lembagaTerlibat || [])].sort()
+  return la.length === lb.length && la.every((v, i) => v === lb[i])
+}
+// Potong ke batas kata terdekat supaya awalan/akhiran gabungan tidak memutus kata
+// di tengah (mis. "Renang kel" -> "Renang ").
+function potongAwalanKeBatasKata(s: string): string {
+  if (!s || /\s$/.test(s)) return s
+  const idx = s.lastIndexOf(' ')
+  return idx >= 0 ? s.slice(0, idx + 1) : ''
+}
+function potongAkhiranKeBatasKata(s: string): string {
+  if (!s || /^\s/.test(s)) return s
+  const idx = s.indexOf(' ')
+  return idx >= 0 ? s.slice(idx) : ''
+}
+// Cari "tema" (awalan dan/atau akhiran) yang sama persis di semua teks keterangan --
+// kalau tidak ada kesamaan yang berarti (cuma kebetulan 1-2 huruf awal doang), berarti
+// aktivitasnya beda tema dan TIDAK boleh diringkas jadi satu baris.
+function temaGabungan(teksList: string[]): { prefix: string; suffix: string; remainder: string[] } | null {
+  if (teksList.length < 2) return null
+  let prefix = teksList[0]
+  for (let i = 1; i < teksList.length && prefix; i++) {
+    let j = 0
+    const maxLen = Math.min(prefix.length, teksList[i].length)
+    while (j < maxLen && prefix[j] === teksList[i][j]) j++
+    prefix = prefix.slice(0, j)
+  }
+  const sisaSetelahPrefix = teksList.map(t => t.slice(prefix.length))
+  let suffix = sisaSetelahPrefix[0]
+  for (let i = 1; i < sisaSetelahPrefix.length && suffix; i++) {
+    const s = sisaSetelahPrefix[i]
+    let j = 0
+    const maxLen = Math.min(suffix.length, s.length)
+    while (j < maxLen && suffix[suffix.length - 1 - j] === s[s.length - 1 - j]) j++
+    suffix = suffix.slice(suffix.length - j)
+  }
+  // Cuma perlu dipotong ke batas kata kalau prefix/suffix itu BENAR-BENAR memotong di
+  // tengah salah satu teks asli (ada sisa setelah prefix / sebelum suffix pada
+  // setidaknya satu entri) -- kalau prefix/suffix pas sama dgn keseluruhan teks (mis.
+  // semua keterangan persis identik), tidak ada risiko motong kata, jadi jangan dipotong
+  // (supaya tidak kehilangan sebagian teks yang harusnya utuh, mis. "Piket Kebersihan"
+  // yang identik di tiap hari jangan sampai kepotong jadi cuma "Piket ").
+  const prefixPerluDipotong = teksList.some(t => t.length > prefix.length)
+  const prefixTrim = prefixPerluDipotong ? potongAwalanKeBatasKata(prefix) : prefix
+  const suffixPerluDipotong = sisaSetelahPrefix.some(s => s.length > suffix.length)
+  const suffixTrim = suffixPerluDipotong ? potongAkhiranKeBatasKata(suffix) : suffix
+  if (prefixTrim.trim().length + suffixTrim.trim().length < 3) return null
+  const remainder = teksList.map(t => t.slice(prefixTrim.length, t.length - suffixTrim.length).trim())
+  return { prefix: prefixTrim, suffix: suffixTrim, remainder }
+}
+// Susun teks ringkasan akhir dari hasil temaGabungan -- kalau semua remainder kosong
+// (keterangannya persis sama di tiap hari), tampilkan teksnya sekali saja tanpa daftar.
+function teksRingkasan(tema: { prefix: string; suffix: string; remainder: string[] }): string {
+  const adaIsi = tema.remainder.some(r => r)
+  if (!adaIsi) return `${tema.prefix}${tema.suffix}`.trim()
+  return `${tema.prefix}${tema.remainder.join(', ')}${tema.suffix}`
+}
+// Kelompokkan daftar agenda (SUDAH terurut tanggal naik) jadi blok-blok ringkas --
+// dipakai BERSAMA oleh Daftar Agenda Tersimpan (sidebar) DAN kalender cetak (Cetak
+// Kaldik/PDF), supaya keduanya konsisten meringkas baris berurutan bertema sama.
+function kelompokkanAgendaBerurutan<T extends { it: AgendaItem }>(
+  daftarUrut: T[]
+): { anggota: T[]; tema: ReturnType<typeof temaGabungan> }[] {
+  const hasil: { anggota: T[]; tema: ReturnType<typeof temaGabungan> }[] = []
+  let current: T[] = []
+  const tutupGrup = () => {
+    if (current.length === 0) return
+    if (current.length === 1) {
+      hasil.push({ anggota: current, tema: null })
+    } else {
+      const tema = temaGabungan(current.map(c => c.it.keterangan))
+      if (tema) hasil.push({ anggota: current, tema })
+      else current.forEach(c => hasil.push({ anggota: [c], tema: null }))
+    }
+    current = []
+  }
+  daftarUrut.forEach(entri => {
+    const { it } = entri
+    if (!agendaSatuHari(it)) { tutupGrup(); hasil.push({ anggota: [entri], tema: null }); return }
+    if (current.length === 0) { current = [entri]; return }
+    const terakhir = current[current.length - 1]
+    const konsekutif = tanggalBerikutnya(terakhir.it.tanggal) === it.tanggal
+    if (konsekutif && cakupanSama(terakhir.it, it)) {
+      const kandidat = [...current, entri]
+      const tema = temaGabungan(kandidat.map(c => c.it.keterangan))
+      if (tema) { current = kandidat; return }
+    }
+    // Entri lain yang KEBETULAN tanggalnya SAMA PERSIS dengan hari terakhir grup yang
+    // sedang terbuka (mis. "Outing Class 4" jatuh di hari yang sama dengan hari terakhir
+    // rangkaian "Praktik renang") bukan bagian dari tema grup ini, tapi juga TIDAK boleh
+    // memutus rangkaiannya begitu saja -- entri itu ditampilkan berdiri sendiri, sementara
+    // grup yang sedang terbuka dibiarkan menunggu kelanjutannya di hari berikutnya (supaya
+    // "5-7 Okt: ...1A,1B,2A" dan "8-9 Okt: ...2B,3" tetap nyambung jadi satu kalau memang
+    // berurutan, walau di tengahnya nyempil kegiatan lain di hari yang sama).
+    if (it.tanggal === terakhir.it.tanggal) {
+      hasil.push({ anggota: [entri], tema: null })
+      return
+    }
+    tutupGrup()
+    current = [entri]
+  })
+  tutupGrup()
+  // Entri "nyempil" sehari (lihat catatan di atas) dimasukkan ke hasil SEBELUM grup yang
+  // masih terbuka saat itu akhirnya ditutup -- urutkan ulang berdasarkan tanggal hari
+  // pertama tiap blok supaya daftar akhirnya tetap kronologis.
+  hasil.sort((a, b) => a.anggota[0].it.tanggal.localeCompare(b.anggota[0].it.tanggal))
+  return hasil
+}
 function titiMangsaHariIni(kota: string) {
   const n=new Date(),d=n.getDate(),m=String(n.getMonth()+1).padStart(2,'0')
   return `${kota||'Bandung'}, ${d} ${BULAN_PANJANG[m]} ${n.getFullYear()}`
@@ -245,24 +371,52 @@ function getAgendaBulanCetak(
   daftarAgenda: AgendaItem[],
   klasifikasi: {id:string;label:string;hexColor:string}[],
 ) {
-  const hasil:{tanggal:string;keterangan:string;warna:string}[]=[]
-  const seen=new Set<string>()
   const [bl,tl]=bulanNama.split(' ')
   const bs=MONTH_PAD_MAP[bl]||'01'
-  for(let day=1;day<=jumlahHari;day++) {
-    const fd=`${tl}-${bs}-${String(day).padStart(2,'0')}`
-    daftarAgenda.forEach(item => {
-      const ts=item.tanggalSelesai||item.tanggal
-      if(fd>=item.tanggal&&fd<=ts&&item.lembagaTerlibat?.includes(unitId)) {
-        const key=`${item.tanggal}-${item.keterangan}`
-        if(!seen.has(key)) {
-          seen.add(key)
-          const kla=klasifikasi.find(k=>k.id===item.kategoriKlasifikasi)
-          hasil.push({tanggal:rentangTanggalLabel(item),keterangan:item.keterangan,warna:kla?.hexColor||'#4b5563'})
-        }
-      }
-    })
-  }
+  const awalBulan=`${tl}-${bs}-01`
+  const akhirBulan=`${tl}-${bs}-${String(jumlahHari).padStart(2,'0')}`
+
+  // Kumpulkan SEMUA agenda unit ini (bukan cuma yang bersinggungan dengan bulan ini)
+  // supaya rangkaian berurutan bertema sama TIDAK terputus di batas bulan -- mis.
+  // "31 Agustus - 4 September" tetap SATU kelompok, bukan terpotong jadi dua kotak
+  // terpisah hanya karena kotak cetaknya memang per-bulan.
+  const semuaCocok:AgendaItem[]=[]
+  const seen=new Set<string>()
+  daftarAgenda.forEach(item=>{
+    if(!item.lembagaTerlibat?.includes(unitId)) return
+    const key=`${item.tanggal}-${item.keterangan}`
+    if(seen.has(key)) return
+    seen.add(key)
+    semuaCocok.push(item)
+  })
+  semuaCocok.sort((a,b)=>a.tanggal.localeCompare(b.tanggal))
+
+  // Ringkas baris berurutan bertema sama, SAMA PERSIS logikanya dengan Daftar Agenda
+  // Tersimpan (lihat kelompokkanAgendaBerurutan) -- supaya kalender cetak juga tidak
+  // penuh baris "Renang kelas 1/2/3..." terpisah kalau memang berurutan & satu tema.
+  const blokSemua=kelompokkanAgendaBerurutan(semuaCocok.map(it=>({it})))
+
+  const hasil:{tanggal:string;keterangan:string;warna:string}[]=[]
+  blokSemua.forEach(b=>{
+    const pertama=b.anggota[0].it
+    const warna=klasifikasi.find(k=>k.id===pertama.kategoriKlasifikasi)?.hexColor||'#4b5563'
+    if(b.anggota.length>1&&b.tema) {
+      // Kelompok gabungan (>=2 hari) dicetak UTUH (label rentang lengkapnya, mis.
+      // "31 Agst - 4 Sept: ...") di SETIAP kotak bulan yang beririsan dengan rentangnya
+      // -- sama seperti perlakuan entri tunggal multi-hari, supaya siapa pun yang cuma
+      // melihat satu kotak bulan saja tetap tahu ada kegiatan itu di sekitar situ.
+      const akhir=b.anggota[b.anggota.length-1].it
+      if(akhir.tanggal<awalBulan||pertama.tanggal>akhirBulan) return
+      hasil.push({tanggal:formatRentangSingkat(pertama.tanggal,akhir.tanggal),keterangan:teksRingkasan(b.tema),warna})
+    } else {
+      // Entri tunggal (termasuk yang rentang tanggalnya sendiri sudah multi-hari, mis.
+      // "30 Juli - 2 Agustus") tetap dicetak di SETIAP kotak bulan yang beririsan
+      // dengan rentangnya, persis seperti perilaku semula.
+      const ts=pertama.tanggalSelesai||pertama.tanggal
+      if(ts<awalBulan||pertama.tanggal>akhirBulan) return
+      hasil.push({tanggal:rentangTanggalLabel(pertama),keterangan:pertama.keterangan,warna})
+    }
+  })
   return hasil
 }
 
@@ -805,8 +959,8 @@ export default function KaldikPage() {
 
   const [daftarUnitLembaga,setDaftarUnitLembaga]=useState<{id:string;label:string}[]>([{id:'lembaga-induk',label:'Lembaga / Yayasan Pusat'}])
   const [unitMentahDasbor,setUnitMentahDasbor]=useState<{id:string;nama:string}[]>([])
-  const [masterTingkatLokal,setMasterTingkatLokal]=useState<{id:string;nama:string}[]>([])
-  const [masterRombelLokal,setMasterRombelLokal]=useState<{id:string;nama:string}[]>([])
+  const [masterTingkatLokal,setMasterTingkatLokal]=useState<{id:string;nama:string;lembagaId?:string}[]>([])
+  const [masterRombelLokal,setMasterRombelLokal]=useState<{id:string;nama:string;tingkatId?:string}[]>([])
   const [daftarKlasifikasiAgenda,setDaftarKlasifikasiAgenda]=useState([{id:'asesmen',label:'Asesmen / Evaluasi',hexColor:'#dc2626'},{id:'libur',label:'Tanggal Merah / Libur Khusus',hexColor:'#991b1b'},{id:'osis',label:'Kegiatan Siswa / OSIS',hexColor:'#2563eb'}])
   const [labelKlasifikasi,setLabelKlasifikasi]=useState('')
   const [warnaKlasifikasiHex,setWarnaKlasifikasiHex]=useState('#059669')
@@ -835,6 +989,9 @@ export default function KaldikPage() {
   const [agendaImporGoogle,setAgendaImporGoogle]=useState<AgendaItem[]>([])
   const [showModalImport,setShowModalImport]=useState(false)
   const [agendaTerpilihImport,setAgendaTerpilihImport]=useState<number[]>([])
+  const [sumberImport,setSumberImport]=useState<'google'|'excel'>('google')
+  const [importFileWarning,setImportFileWarning]=useState('')
+  const fileImportRef=useRef<HTMLInputElement>(null)
   const router=useRouter()
 
   const bulanAkademik=(()=>{
@@ -898,7 +1055,7 @@ export default function KaldikPage() {
         const ts=item.end.date?new Date(new Date(tr+'T00:00:00').getTime()-86400000).toISOString().slice(0,10):tr
         return {keterangan:item.summary,tanggal:tm,tanggalSelesai:ts,statusHari:'libur',kategoriKlasifikasi:'libur',lembagaTerlibat:['lembaga-induk'],tingkatTerlibat:[],rombelTerlibat:[],sumberGoogle:true}
       })
-      setAgendaImporGoogle(hasil);setAgendaTerpilihImport(hasil.map((_:AgendaItem,i:number)=>i));setShowModalImport(true)
+      setSumberImport('google');setImportFileWarning('');setAgendaImporGoogle(hasil);setAgendaTerpilihImport(hasil.map((_:AgendaItem,i:number)=>i));setShowModalImport(true)
     }catch(e){alert('Kesalahan koneksi.');console.error(e)}
     finally{setLoadingHoliday(false)}
   }
@@ -910,6 +1067,228 @@ export default function KaldikPage() {
     setShowModalImport(false)
     const skip=dipilih.length-baru.length
     alert(skip>0?`${baru.length} diimpor, ${skip} dilewati.`:`${baru.length} agenda diimpor!`)
+  }
+
+  // Ubah nilai sel tanggal (Date object dari cellDates:true, atau string berbagai format
+  // umum di Excel Indonesia) jadi "YYYY-MM-DD" yang dipakai internal.
+  const normalizeTanggalImpor=(v:unknown):string=>{
+    if(!v) return ''
+    if(v instanceof Date && !isNaN(v.getTime())) return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}-${String(v.getDate()).padStart(2,'0')}`
+    const s=String(v).trim()
+    if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+    const m=s.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{4})$/)
+    if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`
+    return s
+  }
+
+  // Impor banyak agenda sekaligus dari file Excel (.xlsx/.xls) atau CSV, sesuai format
+  // Template_Impor_Kaldik.xlsx (lihat handleUnduhTemplateImpor). Hasil parsing masuk ke
+  // modal konfirmasi yang SAMA dengan impor Google (agendaImporGoogle/agendaTerpilihImport)
+  // supaya alur pemilihan & penyimpanannya konsisten -- ditandai sumberImport='excel'
+  // supaya salinan teks & lencana di modal menyesuaikan.
+  const handleImportExcelFile=async(file:File)=>{
+    setImportFileWarning('')
+    try{
+      const XLSX=await import('xlsx')
+      const buf=await file.arrayBuffer()
+      const wb=XLSX.read(buf,{type:'array',cellDates:true})
+      const ws=wb.Sheets[wb.SheetNames[0]]
+      const rows:Record<string,unknown>[]=XLSX.utils.sheet_to_json(ws,{defval:''})
+      if(!rows.length){alert('File kosong atau format tidak dikenali.');return}
+
+      const cariKolom=(row:Record<string,unknown>,...kandidat:string[]):unknown=>{
+        const keys=Object.keys(row)
+        for(const k of kandidat){
+          const found=keys.find(kk=>kk.trim().toLowerCase()===k.toLowerCase())
+          if(found) return row[found]
+        }
+        return ''
+      }
+
+      let dilewati=0
+      const hasil:AgendaItem[]=rows.map((row):AgendaItem|null=>{
+        const tm=normalizeTanggalImpor(cariKolom(row,'Tanggal Mulai','Tanggal'))
+        const keterangan=String(cariKolom(row,'Keterangan')||'').trim()
+        if(!tm||!keterangan){dilewati++;return null}
+        const tanggalSelesai=normalizeTanggalImpor(cariKolom(row,'Tanggal Selesai'))||tm
+        const statusRaw=String(cariKolom(row,'Status Hari','Status')||'').trim().toLowerCase()
+        const statusHari=statusRaw.startsWith('efektif')?'efektif':'libur'
+
+        const klaRaw=String(cariKolom(row,'Klasifikasi')||'').trim().toLowerCase()
+        const kla=daftarKlasifikasiAgenda.find(k=>k.label.toLowerCase()===klaRaw)
+        const kategoriKlasifikasi=kla?.id||daftarKlasifikasiAgenda[0]?.id||'libur'
+
+        const lembagaRaw=String(cariKolom(row,'Lembaga','Unit','Lembaga/Unit')||'').trim()
+        let lembagaTerlibat:string[]
+        if(!lembagaRaw){
+          lembagaTerlibat=['lembaga-induk',...unitMentahDasbor.map(u=>u.id)]
+        }else{
+          const namaDipilih=lembagaRaw.split(',').map(s=>s.trim().toLowerCase()).filter(Boolean)
+          lembagaTerlibat=daftarUnitLembaga.filter(u=>namaDipilih.includes(u.label.toLowerCase())).map(u=>u.id)
+          if(!lembagaTerlibat.length) lembagaTerlibat=['lembaga-induk',...unitMentahDasbor.map(u=>u.id)]
+        }
+
+        const tingkatRaw=String(cariKolom(row,'Tingkat')||'').trim()
+        const tingkatTerlibat=tingkatRaw
+          ? masterTingkatLokal.filter(t=>tingkatRaw.split(',').map(s=>s.trim().toLowerCase()).includes(t.nama.toLowerCase())).map(t=>t.id)
+          : []
+
+        const rombelRaw=String(cariKolom(row,'Rombel','Kelas')||'').trim()
+        const rombelTerlibat=rombelRaw
+          ? masterRombelLokal.filter(r=>rombelRaw.split(',').map(s=>s.trim().toLowerCase()).includes(r.nama.toLowerCase())).map(r=>r.id)
+          : []
+
+        return {tanggal:tm,tanggalSelesai,keterangan,statusHari,kategoriKlasifikasi,lembagaTerlibat,tingkatTerlibat,rombelTerlibat}
+      }).filter((x):x is AgendaItem=>x!==null)
+
+      if(!hasil.length){alert('Tidak ada baris valid. Pastikan kolom "Tanggal Mulai" dan "Keterangan" terisi sesuai template.');return}
+
+      setSumberImport('excel')
+      setAgendaImporGoogle(hasil)
+      setAgendaTerpilihImport(hasil.map((_,i)=>i))
+      setShowModalImport(true)
+      if(dilewati>0) setImportFileWarning(`${dilewati} baris dilewati karena Tanggal Mulai/Keterangan kosong.`)
+    }catch(e){
+      console.error(e)
+      alert('Gagal membaca file. Pastikan formatnya .xlsx, .xls, atau .csv sesuai Template Impor Kaldik.')
+    }
+  }
+
+  const handlePilihFileImpor=(e:React.ChangeEvent<HTMLInputElement>)=>{
+    const file=e.target.files?.[0]
+    if(file) handleImportExcelFile(file)
+    e.target.value=''
+  }
+
+  // Sediakan file contoh + petunjuk kolom (nama Klasifikasi/Lembaga/Tingkat/Rombel yang
+  // benar-benar ada di data sekolah ini) supaya admin tidak menebak-nebak format impor.
+  // Pakai "exceljs" (bukan "xlsx") KHUSUS utk template ini karena butuh dropdown
+  // (Data Validation) beneran di dalam sel Excel-nya -- paket "xlsx" versi gratis yang
+  // dipakai di tempat lain pada file ini tidak mendukung penulisan Data Validation.
+  // Baca file impor (handleImportExcelFile) TETAP pakai "xlsx" seperti biasa, karena
+  // membaca nilai sel tidak terpengaruh ada/tidaknya dropdown di file sumbernya.
+  const handleUnduhTemplateImpor=async()=>{
+    const ExcelJSMod:any=await import('exceljs')
+    const ExcelJS=ExcelJSMod.default||ExcelJSMod
+    const wb=new ExcelJS.Workbook()
+    const ws=wb.addWorksheet('Template')
+
+    ws.columns=[
+      {header:'Tanggal Mulai',key:'tm',width:14},
+      {header:'Tanggal Selesai',key:'ts',width:14},
+      {header:'Keterangan',key:'ket',width:32},
+      {header:'Status Hari',key:'status',width:12},
+      {header:'Klasifikasi',key:'kla',width:20},
+      {header:'Lembaga/Unit',key:'lem',width:24},
+      {header:'Tingkat',key:'tkt',width:16},
+      {header:'Rombel',key:'rmb',width:16},
+    ]
+    ws.getRow(1).font={bold:true}
+    ws.addRow(['2026-07-13','2026-07-17','Fortasi / MPLS','Libur',daftarKlasifikasiAgenda[0]?.label||'Kegiatan Sekolah','',masterTingkatLokal[0]?.nama||'',''])
+    ws.addRow(['2026-12-22','2027-01-03','Libur Akhir Semester Ganjil','Libur',daftarKlasifikasiAgenda[0]?.label||'Libur','','',''])
+
+    const labelKlasifikasi=daftarKlasifikasiAgenda.map(k=>k.label)
+
+    // ── Sheet "Data" (referensi, disembunyikan) -- sumber dropdown BERJENJANG:
+    // opsi Tingkat (Kelas) mengikuti Lembaga/Unit yang dipilih di baris yang sama,
+    // opsi Rombel mengikuti Tingkat yang dipilih di baris yang sama. Dipakai lewat
+    // referensi rentang sel (bukan daftar literal), jadi tidak kena batas ~255 karakter
+    // Excel utk list literal -- otomatis mengakomodir berapa pun banyaknya Unit/Tingkat/
+    // Rombel yang ada.
+    const wsData=wb.addWorksheet('Data')
+    wsData.state='hidden'
+
+    labelKlasifikasi.forEach((v,i)=>{ wsData.getCell(i+2,1).value=v })
+
+    // Kolom C = daftar Lembaga/Unit; kolom D..W (20 kolom) di baris yang sama = daftar
+    // Tingkat milik unit itu. "Lembaga Pusat" mewakili SELURUH tingkat di semua unit.
+    const unitDenganTingkat=daftarUnitLembaga.map(u=>({
+      unit:u.label,
+      tingkat:u.id==='lembaga-induk'
+        ? Array.from(new Set(masterTingkatLokal.map(t=>t.nama)))
+        : masterTingkatLokal.filter(t=>t.lembagaId===u.id).map(t=>t.nama),
+    }))
+    unitDenganTingkat.forEach((u,i)=>{
+      const row=i+2
+      wsData.getCell(row,3).value=u.unit
+      u.tingkat.slice(0,20).forEach((t,j)=>{ wsData.getCell(row,4+j).value=t })
+    })
+
+    // Kolom Y = daftar nama Tingkat (unik); kolom Z..BC (30 kolom) di baris yang sama =
+    // daftar Rombel milik tingkat itu.
+    const namaTingkatUnik=Array.from(new Set(masterTingkatLokal.map(t=>t.nama)))
+    const tingkatDenganRombel=namaTingkatUnik.map(namaT=>{
+      const idTingkatCocok=masterTingkatLokal.filter(t=>t.nama===namaT).map(t=>t.id)
+      return {tingkat:namaT,rombel:masterRombelLokal.filter(r=>r.tingkatId&&idTingkatCocok.includes(r.tingkatId)).map(r=>r.nama)}
+    })
+    tingkatDenganRombel.forEach((t,i)=>{
+      const row=i+2
+      wsData.getCell(row,25).value=t.tingkat
+      t.rombel.slice(0,30).forEach((r,j)=>{ wsData.getCell(row,26+j).value=r })
+    })
+
+    const baurUnitAkhir=Math.max(unitDenganTingkat.length+1,2)
+    const baurTingkatAkhir=Math.max(tingkatDenganRombel.length+1,2)
+    const rentangKlasifikasi=`Data!$A$2:$A$${Math.max(labelKlasifikasi.length+1,2)}`
+    const rentangUnit=`Data!$C$2:$C$${baurUnitAkhir}`
+
+    const BARIS_MAKS=300
+    for(let r=2;r<=BARIS_MAKS;r++){
+      // Status Hari & Klasifikasi: wajib pilih salah satu dari dropdown (error keras).
+      ws.getCell(`D${r}`).dataValidation={
+        type:'list',allowBlank:true,formulae:['"Libur,Efektif"'],
+        showErrorMessage:true,errorStyle:'error',errorTitle:'Nilai tidak baku',
+        error:'Pilih salah satu dari daftar dropdown.',
+      }
+      ws.getCell(`E${r}`).dataValidation={
+        type:'list',allowBlank:true,formulae:[rentangKlasifikasi],
+        showErrorMessage:true,errorStyle:'error',errorTitle:'Nilai tidak baku',
+        error:'Pilih salah satu dari daftar dropdown.',
+      }
+      // Lembaga/Unit: daftar lengkap semua unit (paling atas, tidak berjenjang). Boleh
+      // ketik manual dipisah koma kalau berlaku utk lebih dari satu unit sekaligus
+      // (makanya errorStyle "warning", bukan "error" -- tidak diblokir).
+      ws.getCell(`F${r}`).dataValidation={
+        type:'list',allowBlank:true,formulae:[rentangUnit],
+        showErrorMessage:true,errorStyle:'warning',errorTitle:'Nilai tidak baku',
+        error:'Kalau mau isi lebih dari satu Lembaga/Unit, ketik manual dipisah koma -- boleh diabaikan.',
+      }
+      // Tingkat (Kelas): opsinya BERJENJANG mengikuti Lembaga/Unit di kolom F baris ini.
+      ws.getCell(`G${r}`).dataValidation={
+        type:'list',allowBlank:true,
+        formulae:[`OFFSET(Data!$C$2,MATCH($F${r},${rentangUnit},0)-1,1,1,20)`],
+        showErrorMessage:true,errorStyle:'warning',errorTitle:'Nilai tidak baku',
+        error:'Isi Lembaga/Unit dulu supaya daftar Tingkat muncul -- atau ketik manual dipisah koma kalau mau lebih dari satu.',
+      }
+      // Rombel: opsinya BERJENJANG mengikuti Tingkat di kolom G baris ini.
+      ws.getCell(`H${r}`).dataValidation={
+        type:'list',allowBlank:true,
+        formulae:[`OFFSET(Data!$Y$2,MATCH($G${r},Data!$Y$2:$Y$${baurTingkatAkhir},0)-1,1,1,30)`],
+        showErrorMessage:true,errorStyle:'warning',errorTitle:'Nilai tidak baku',
+        error:'Isi Tingkat dulu supaya daftar Rombel muncul -- atau ketik manual dipisah koma kalau mau lebih dari satu.',
+      }
+    }
+
+    const wsPetunjuk=wb.addWorksheet('Petunjuk')
+    wsPetunjuk.columns=[{width:24},{width:90}]
+    wsPetunjuk.addRow(['PETUNJUK PENGISIAN TEMPLATE IMPOR KALDIK',''])
+    wsPetunjuk.getRow(1).font={bold:true}
+    wsPetunjuk.addRow(['',''])
+    wsPetunjuk.addRow(['Tanggal Mulai / Tanggal Selesai','Format YYYY-MM-DD (mis. 2026-07-13). Tanggal Selesai boleh dikosongkan kalau cuma 1 hari.'])
+    wsPetunjuk.addRow(['Status Hari','Pilih dari dropdown: Libur (memotong hari efektif) atau Efektif (tetap KBM, mis. Ujian/MPLS).'])
+    wsPetunjuk.addRow(['Klasifikasi','Pilih dari dropdown: '+(labelKlasifikasi.join(', ')||'(belum ada data klasifikasi -- buat dulu di bagian Klasifikasi Agenda)')])
+    wsPetunjuk.addRow(['Lembaga/Unit','Kosongkan utk berlaku semua unit, atau pilih dari dropdown. Kalau berlaku utk LEBIH DARI SATU unit, ketik manual dipisah koma (mis. "Unit A, Unit B").'])
+    wsPetunjuk.addRow(['Tingkat (Kelas)','Dropdown-nya BERJENJANG mengikuti Lembaga/Unit yang diisi di kolom F baris yang sama -- isi Lembaga/Unit dulu, baru pilihan Tingkat-nya muncul. Kosongkan utk semua tingkat di unit itu, atau ketik manual dipisah koma kalau lebih dari satu tingkat.'])
+    wsPetunjuk.addRow(['Rombel','Dropdown-nya BERJENJANG mengikuti Tingkat yang diisi di kolom G baris yang sama -- isi Tingkat dulu, baru pilihan Rombel-nya muncul. Kosongkan utk semua rombel di tingkat itu, atau ketik manual dipisah koma kalau lebih dari satu rombel.'])
+    wsPetunjuk.addRow(['',''])
+    wsPetunjuk.addRow(['Catatan','Dropdown Tingkat & Rombel cuma menampilkan SATU pilihan per klik (batasan Excel) -- kalau perlu lebih dari satu, ketik manual dipisah koma persis seperti nama yang ada di dropdown, tidak akan diblokir, cuma muncul tanda peringatan yang boleh diabaikan.'])
+
+    const buf=await wb.xlsx.writeBuffer()
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+    const url=URL.createObjectURL(blob)
+    const a=document.createElement('a')
+    a.href=url;a.download='Template_Impor_Kaldik.xlsx';a.click()
+    URL.revokeObjectURL(url)
   }
 
   const handleTambahKlasifikasi=(e:React.FormEvent)=>{
@@ -929,11 +1308,47 @@ export default function KaldikPage() {
     if(klasifikasiTerpilih===id&&filtered.length>0) setKlasifikasiTerpilih(filtered[0].id)
     if(idKlasifikasiSedangDiedit===id) handleBatalEditKla()
   }
+  // Centang Lembaga Pusat -> otomatis ikut mencentang SEMUA Tingkat (kelas), yang pada
+  // gilirannya juga otomatis mencentang semua Rombel di bawahnya (kaskade sampai ke
+  // Rombel, sama seperti mencentang Tingkat satu-satu lewat handleToggleTingkat).
+  // Centang Lembaga Unit tertentu -> hanya Tingkat yg lembagaId-nya cocok dgn unit itu
+  // yang ikut tercentang (beserta Rombel-nya). Uncheck Lembaga melepas kembali Tingkat &
+  // Rombel yang terkait lembaga itu. Tingkat/Rombel tetap bisa disesuaikan manual kapan
+  // saja setelahnya, independen dari Lembaga.
   const handleToggleLembaga=(id:string)=>{
-    if(id==='lembaga-induk'){setLembagaTerlibat(lembagaTerlibat.includes('lembaga-induk')?[]:['lembaga-induk',...unitMentahDasbor.map(u=>u.id)]);return}
-    setLembagaTerlibat(lembagaTerlibat.includes(id)?lembagaTerlibat.filter(x=>x!==id):[...lembagaTerlibat,id])
+    const sedangAktif=id==='lembaga-induk'?lembagaTerlibat.includes('lembaga-induk'):lembagaTerlibat.includes(id)
+    const tingkatTerkait=id==='lembaga-induk'
+      ? masterTingkatLokal.map(t=>t.id)
+      : masterTingkatLokal.filter(t=>t.lembagaId===id).map(t=>t.id)
+    const rombelTerkait=masterRombelLokal.filter(r=>r.tingkatId&&tingkatTerkait.includes(r.tingkatId)).map(r=>r.id)
+
+    if(sedangAktif){
+      setLembagaTerlibat(id==='lembaga-induk'?[]:lembagaTerlibat.filter(x=>x!==id))
+      setTingkatTerlibat(tingkatTerlibat.filter(tid=>!tingkatTerkait.includes(tid)))
+      setRombelTerlibat(rombelTerlibat.filter(rid=>!rombelTerkait.includes(rid)))
+    }else{
+      setLembagaTerlibat(id==='lembaga-induk'?['lembaga-induk',...unitMentahDasbor.map(u=>u.id)]:[...lembagaTerlibat,id])
+      setTingkatTerlibat(Array.from(new Set([...tingkatTerlibat,...tingkatTerkait])))
+      setRombelTerlibat(Array.from(new Set([...rombelTerlibat,...rombelTerkait])))
+    }
   }
   const toggleArr=(arr:string[],setArr:(v:string[])=>void,id:string)=>setArr(arr.includes(id)?arr.filter(x=>x!==id):[...arr,id])
+
+  // Centang Tingkat (mis. "Kelas 1") -> otomatis ikut mencentang SEMUA rombel di tingkat
+  // itu (mis. 1A & 1B) di bagian Rombel, karena tingkat mewakili rombel-rombel di
+  // dalamnya -- jadi admin tidak perlu mencentang ulang satu-satu. Uncheck Tingkat juga
+  // otomatis melepas rombel-rombel yg tadi ikut tercentang karenanya. Rombel tetap bisa
+  // dicentang/dilepas manual satu-satu kapan saja setelahnya (independen dari Tingkat).
+  const handleToggleTingkat=(id:string)=>{
+    const rombelDariTingkatIni=masterRombelLokal.filter(r=>r.tingkatId===id).map(r=>r.id)
+    if(tingkatTerlibat.includes(id)){
+      setTingkatTerlibat(tingkatTerlibat.filter(x=>x!==id))
+      setRombelTerlibat(rombelTerlibat.filter(rid=>!rombelDariTingkatIni.includes(rid)))
+    }else{
+      setTingkatTerlibat([...tingkatTerlibat,id])
+      setRombelTerlibat(Array.from(new Set([...rombelTerlibat,...rombelDariTingkatIni])))
+    }
+  }
 
   const handleSimpanAgenda=(e:React.FormEvent)=>{
     e.preventDefault()
@@ -973,6 +1388,17 @@ export default function KaldikPage() {
     })
   const getKlaStyle=(id:string)=>daftarKlasifikasiAgenda.find(k=>k.id===id)||{hexColor:'#4b5563',label:'Agenda Umum'}
   const unitSedangTampil=daftarUnitLembaga.find(u=>u.id===kategoriAktifTampil)||daftarUnitLembaga[0]
+
+  // Kelompokkan baris-baris berurutan (tanggal N, N+1, N+2, ...) yang bertema sama
+  // (lihat temaGabungan) jadi satu blok ringkas untuk TAMPILAN saja -- data asli di
+  // daftarAgenda/localStorage tidak disentuh sama sekali. Dimatikan saat pencarian
+  // aktif supaya hasil pencarian tetap tampil apa adanya, satu baris per entri.
+  const blokAgendaTampil=useMemo(()=>{
+    if(pencarianAgenda.trim()) return daftarAgendaUrut.map(entri=>({anggota:[entri],tema:null as ReturnType<typeof temaGabungan>}))
+    return kelompokkanAgendaBerurutan(daftarAgendaUrut)
+  },[daftarAgendaUrut,pencarianAgenda])
+  const [grupTerbuka,setGrupTerbuka]=useState<Set<number>>(new Set())
+  const toggleGrupTerbuka=(kunci:number)=>setGrupTerbuka(prev=>{const next=new Set(prev);next.has(kunci)?next.delete(kunci):next.add(kunci);return next})
 
   const cariAgendaTanggal=(day:number,monthName:string,unitId:string)=>{
     const [bl,yl]=monthName.split(' ');const bs=MONTH_PAD_MAP[bl]||'01'
@@ -1077,12 +1503,19 @@ export default function KaldikPage() {
             <button onClick={()=>router.push('/dashboard')} className="p-2 hover:bg-gray-100 rounded-full"><ArrowLeft className="w-5 h-5 text-gray-600"/></button>
             <h1 className="text-xl font-bold text-gray-800">Manajemen Kalender Pendidikan</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap justify-end">
             <button onClick={()=>setShowCetakModal(true)} className="flex items-center gap-2 bg-[#F5EDF7] border border-[#D9BFE0] text-[#551566] px-4 py-2 rounded-lg text-sm font-semibold hover:bg-[#EDE0F0]"><Printer className="w-4 h-4"/> Cetak Kaldik</button>
             {bolehEdit && (
+            <>
+            <input ref={fileImportRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handlePilihFileImpor}/>
+            {daftarKlasifikasiAgenda.length>0 && (
+            <button onClick={handleUnduhTemplateImpor} className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-amber-100"><FileSpreadsheet className="w-4 h-4"/> Unduh Template Impor</button>
+            )}
+            <button onClick={()=>fileImportRef.current?.click()} className="flex items-center gap-2 bg-purple-50 border border-purple-200 text-purple-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-purple-100"><Upload className="w-4 h-4"/> Impor dari Excel/CSV</button>
             <button onClick={()=>googleAccessToken?fetchHolidaysFromGoogle(googleAccessToken):loginGoogle()} disabled={loadingHoliday} className="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-green-100 disabled:opacity-50">
               <Download className={`w-4 h-4 ${loadingHoliday?'animate-bounce':''}`}/>{loadingHoliday?'Mengambil…':googleAccessToken?'Refresh Hari Libur':'Impor Hari Libur Google'}
             </button>
+            </>
             )}
             <button onClick={handleBukaModalSinkron} className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-600 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-100"><RefreshCw className="w-4 h-4"/> Ekspor ke Google Calendar</button>
           </div>
@@ -1168,11 +1601,12 @@ export default function KaldikPage() {
                     {!daftarKlasifikasiAgenda.length?<option>Belum ada</option>:daftarKlasifikasiAgenda.map(k=><option key={k.id} value={k.id}>{k.label}</option>)}
                   </select></div>
                 <div><label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Unit Cakupan</label>
+                  <p className="text-[10px] text-gray-400 mb-1.5">Lembaga Pusat otomatis mencentang semua Tingkat & Rombel; Lembaga Unit otomatis mencentang Tingkat & Rombel di unit itu saja.</p>
                   <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 space-y-2 max-h-36 overflow-y-auto">
                     {daftarUnitLembaga.map(u=><div key={u.id} className="flex items-center gap-2.5"><input type="checkbox" id={`cb-${u.id}`} checked={lembagaTerlibat.includes(u.id)} onChange={()=>handleToggleLembaga(u.id)} className="w-4 h-4 text-[#6A197D] rounded border-gray-300"/><label htmlFor={`cb-${u.id}`} className="text-xs font-semibold text-gray-700">{u.label}</label></div>)}
                   </div></div>
-                {masterTingkatLokal.length>0&&<div><label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Tingkat (Opsional)</label><div className="p-3 bg-gray-50 rounded-lg border border-gray-200 grid grid-cols-2 gap-2 max-h-28 overflow-y-auto">{masterTingkatLokal.map(l=><div key={l.id} className="flex items-center gap-2"><input type="checkbox" checked={tingkatTerlibat.includes(l.id)} onChange={()=>toggleArr(tingkatTerlibat,setTingkatTerlibat,l.id)} className="w-3.5 h-3.5 text-[#6A197D] rounded border-gray-300"/><label className="text-[11px] font-bold text-gray-600">{l.nama}</label></div>)}</div></div>}
-                {masterRombelLokal.length>0&&<div><label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Rombel (Opsional)</label><div className="p-3 bg-gray-50 rounded-lg border border-gray-200 grid grid-cols-3 gap-2 max-h-32 overflow-y-auto">{masterRombelLokal.map(r=><div key={r.id} className="flex items-center gap-1.5"><input type="checkbox" checked={rombelTerlibat.includes(r.id)} onChange={()=>toggleArr(rombelTerlibat,setRombelTerlibat,r.id)} className="w-3 h-3 text-[#6A197D] rounded border-gray-300"/><label className="text-[10px] font-bold text-gray-600">{r.nama}</label></div>)}</div></div>}
+                {masterTingkatLokal.length>0&&<div><label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Tingkat (Opsional)</label><p className="text-[10px] text-gray-400 mb-1.5">Centang Tingkat otomatis mencentang semua Rombel di bawahnya.</p><div className="p-3 bg-gray-50 rounded-lg border border-gray-200 grid grid-cols-2 gap-2 max-h-28 overflow-y-auto">{masterTingkatLokal.map(l=><div key={l.id} className="flex items-center gap-2"><input type="checkbox" checked={tingkatTerlibat.includes(l.id)} onChange={()=>handleToggleTingkat(l.id)} className="w-3.5 h-3.5 text-[#6A197D] rounded border-gray-300"/><label className="text-[11px] font-bold text-gray-600">{l.nama}</label></div>)}</div></div>}
+                {masterRombelLokal.length>0&&<div><label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Rombel (Opsional)</label><p className="text-[10px] text-gray-400 mb-1.5">Bisa disesuaikan manual, mis. lepas centang salah satu rombel saja.</p><div className="p-3 bg-gray-50 rounded-lg border border-gray-200 grid grid-cols-3 gap-2 max-h-32 overflow-y-auto">{masterRombelLokal.map(r=><div key={r.id} className="flex items-center gap-1.5"><input type="checkbox" checked={rombelTerlibat.includes(r.id)} onChange={()=>toggleArr(rombelTerlibat,setRombelTerlibat,r.id)} className="w-3 h-3 text-[#6A197D] rounded border-gray-300"/><label className="text-[10px] font-bold text-gray-600">{r.nama}</label></div>)}</div></div>}
                 <div><label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">Status Hari</label>
                   <select value={statusHari} onChange={e=>setStatusHari(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0">
                     <option value="libur">Hari Libur Khusus</option><option value="efektif">Hari Efektif KBM</option>
@@ -1197,27 +1631,76 @@ export default function KaldikPage() {
                 <input type="text" value={pencarianAgenda} onChange={e=>setPencarianAgenda(e.target.value)} placeholder="Cari agenda (keterangan atau tanggal yyyy-mm-dd)..." className="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-[#F5EDF7]0"/>
               </div>
               <div className="overflow-y-auto max-h-[560px]">
-                {daftarAgendaUrut.length===0?<p className="text-sm text-gray-400 text-center py-12">{pencarianAgenda?'Tidak ada agenda yang cocok dengan pencarian.':'Belum ada agenda.'}</p>:(
+                {blokAgendaTampil.length===0?<p className="text-sm text-gray-400 text-center py-12">{pencarianAgenda?'Tidak ada agenda yang cocok dengan pencarian.':'Belum ada agenda.'}</p>:(
                   <ul className="divide-y divide-gray-100">
-                    {daftarAgendaUrut.map(({it,i})=>(
-                      <li key={i} className="py-3 flex justify-between items-center">
-                        <div className="flex-1 pr-4">
-                          <p className="text-sm font-bold text-gray-800 flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full shrink-0" style={{backgroundColor:getKlaStyle(it.kategoriKlasifikasi).hexColor}}/>{it.keterangan}{it.sumberGoogle&&<span className="text-[8px] px-1.5 py-0.5 rounded font-bold bg-blue-50 text-blue-600 border border-blue-100">Google</span>}</p>
-                          <p className="text-[10px] font-semibold text-[#6A197D] mt-0.5 ml-4">{formatRentangSingkat(it.tanggal,it.tanggalSelesai)}</p>
-                          <div className="flex flex-wrap gap-1.5 mt-1 ml-4">
-                            {it.lembagaTerlibat.map(id=><span key={id} className="text-[8px] px-1.5 py-0.5 rounded font-bold border border-gray-200 text-white" style={{backgroundColor:'#4b5563'}}>{getUnitLabel(id).label.toUpperCase()}</span>)}
-                            <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold border ${it.statusHari==='libur'?'bg-red-50 text-red-600 border-red-100':'bg-green-50 text-green-600 border-green-100'}`}>{it.statusHari.toUpperCase()}</span>
-                            <span className="text-[8px] px-1.5 py-0.5 rounded font-bold text-white" style={{backgroundColor:getKlaStyle(it.kategoriKlasifikasi).hexColor}}>{getKlaStyle(it.kategoriKlasifikasi).label.toUpperCase()}</span>
+                    {blokAgendaTampil.map(blok=>{
+                      const kunci=blok.anggota[0].i
+                      if(blok.anggota.length===1||!blok.tema){
+                        const {it,i}=blok.anggota[0]
+                        return (
+                          <li key={kunci} className="py-3 flex justify-between items-center">
+                            <div className="flex-1 pr-4">
+                              <p className="text-sm font-bold text-gray-800 flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full shrink-0" style={{backgroundColor:getKlaStyle(it.kategoriKlasifikasi).hexColor}}/>{it.keterangan}{it.sumberGoogle&&<span className="text-[8px] px-1.5 py-0.5 rounded font-bold bg-blue-50 text-blue-600 border border-blue-100">Google</span>}</p>
+                              <p className="text-[10px] font-semibold text-[#6A197D] mt-0.5 ml-4">{formatRentangSingkat(it.tanggal,it.tanggalSelesai)}</p>
+                              <div className="flex flex-wrap gap-1.5 mt-1 ml-4">
+                                {it.lembagaTerlibat.map(id=><span key={id} className="text-[8px] px-1.5 py-0.5 rounded font-bold border border-gray-200 text-white" style={{backgroundColor:'#4b5563'}}>{getUnitLabel(id).label.toUpperCase()}</span>)}
+                                <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold border ${it.statusHari==='libur'?'bg-red-50 text-red-600 border-red-100':'bg-green-50 text-green-600 border-green-100'}`}>{it.statusHari.toUpperCase()}</span>
+                                <span className="text-[8px] px-1.5 py-0.5 rounded font-bold text-white" style={{backgroundColor:getKlaStyle(it.kategoriKlasifikasi).hexColor}}>{getKlaStyle(it.kategoriKlasifikasi).label.toUpperCase()}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 border-l pl-2 border-gray-100">
+                              {bolehEdit && <>
+                              <button onClick={()=>handleEditAgendaClick(i)} className="p-1.5 text-[#6A197D] hover:bg-[#F5EDF7] rounded-lg border border-[#EDE0F0]"><Edit2 className="w-4 h-4"/></button>
+                              <button onClick={()=>handleHapusAgenda(i)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md"><Trash2 className="w-4 h-4"/></button>
+                              </>}
+                            </div>
+                          </li>
+                        )
+                      }
+                      // Blok gabungan (>=2 baris berurutan bertema sama) -- ringkas satu baris,
+                      // bisa dibuka utk lihat & edit/hapus tiap entri asli per-hari per-kelas.
+                      const itPertama=blok.anggota[0].it
+                      const itAkhir=blok.anggota[blok.anggota.length-1].it
+                      const terbuka=grupTerbuka.has(kunci)
+                      return (
+                        <li key={kunci} className="py-1">
+                          <div className="py-2 flex justify-between items-center cursor-pointer" onClick={()=>toggleGrupTerbuka(kunci)}>
+                            <div className="flex-1 pr-4">
+                              <p className="text-sm font-bold text-gray-800 flex items-center gap-2 flex-wrap">
+                                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{backgroundColor:getKlaStyle(itPertama.kategoriKlasifikasi).hexColor}}/>
+                                {teksRingkasan(blok.tema)}
+                                <span className="text-[8px] px-1.5 py-0.5 rounded font-bold bg-slate-100 text-slate-500 border border-slate-200">{blok.anggota.length} HARI</span>
+                              </p>
+                              <p className="text-[10px] font-semibold text-[#6A197D] mt-0.5 ml-4">{formatRentangSingkat(itPertama.tanggal,itAkhir.tanggal)}</p>
+                              <div className="flex flex-wrap gap-1.5 mt-1 ml-4">
+                                {itPertama.lembagaTerlibat.map(id=><span key={id} className="text-[8px] px-1.5 py-0.5 rounded font-bold border border-gray-200 text-white" style={{backgroundColor:'#4b5563'}}>{getUnitLabel(id).label.toUpperCase()}</span>)}
+                                <span className={`text-[8px] px-1.5 py-0.5 rounded font-bold border ${itPertama.statusHari==='libur'?'bg-red-50 text-red-600 border-red-100':'bg-green-50 text-green-600 border-green-100'}`}>{itPertama.statusHari.toUpperCase()}</span>
+                                <span className="text-[8px] px-1.5 py-0.5 rounded font-bold text-white" style={{backgroundColor:getKlaStyle(itPertama.kategoriKlasifikasi).hexColor}}>{getKlaStyle(itPertama.kategoriKlasifikasi).label.toUpperCase()}</span>
+                              </div>
+                            </div>
+                            <ChevronDown className={`w-4 h-4 text-gray-400 shrink-0 transition-transform ${terbuka?'rotate-180':''}`}/>
                           </div>
-                        </div>
-                        <div className="flex items-center gap-1.5 border-l pl-2 border-gray-100">
-                          {bolehEdit && <>
-                          <button onClick={()=>handleEditAgendaClick(i)} className="p-1.5 text-[#6A197D] hover:bg-[#F5EDF7] rounded-lg border border-[#EDE0F0]"><Edit2 className="w-4 h-4"/></button>
-                          <button onClick={()=>handleHapusAgenda(i)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md"><Trash2 className="w-4 h-4"/></button>
-                          </>}
-                        </div>
-                      </li>
-                    ))}
+                          {terbuka&&(
+                            <ul className="ml-4 pl-3 border-l-2 border-gray-100 divide-y divide-gray-50">
+                              {blok.anggota.map(({it,i})=>(
+                                <li key={i} className="py-2.5 flex justify-between items-center">
+                                  <div className="flex-1 pr-4">
+                                    <p className="text-xs font-bold text-gray-700">{it.keterangan}{it.sumberGoogle&&<span className="text-[8px] px-1.5 py-0.5 rounded font-bold bg-blue-50 text-blue-600 border border-blue-100 ml-1.5">Google</span>}</p>
+                                    <p className="text-[10px] font-semibold text-[#6A197D] mt-0.5">{formatRentangSingkat(it.tanggal,it.tanggalSelesai)}</p>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 border-l pl-2 border-gray-100">
+                                    {bolehEdit && <>
+                                    <button onClick={()=>handleEditAgendaClick(i)} className="p-1.5 text-[#6A197D] hover:bg-[#F5EDF7] rounded-lg border border-[#EDE0F0]"><Edit2 className="w-3.5 h-3.5"/></button>
+                                    <button onClick={()=>handleHapusAgenda(i)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md"><Trash2 className="w-3.5 h-3.5"/></button>
+                                    </>}
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </li>
+                      )
+                    })}
                   </ul>
                 )}
               </div>
@@ -1281,11 +1764,14 @@ export default function KaldikPage() {
       {showModalImport&&(
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
-            <div className="flex justify-between items-center px-6 py-4 border-b"><div className="flex items-center gap-3"><Download className="w-5 h-5 text-green-600"/><div><h3 className="text-base font-bold text-gray-800">Impor Hari Libur Google</h3><p className="text-[11px] text-gray-500">{agendaImporGoogle.length} hari libur — TA {tahunAjaran}</p></div></div><button onClick={()=>setShowModalImport(false)} className="text-gray-400 hover:text-red-600"><X className="w-5 h-5"/></button></div>
-            <div className="px-6 py-3 bg-green-50 border-b border-green-100"><p className="text-[11px] text-green-700">💡 Hari libur nasional & hari besar Indonesia. Data langsung tersimpan setelah diimpor.</p></div>
-            <div className="px-6 py-3 bg-gray-50 border-b flex justify-between"><p className="text-xs font-semibold text-gray-500">{agendaTerpilihImport.length}/{agendaImporGoogle.length} terpilih</p><div className="flex gap-3"><button onClick={()=>setAgendaTerpilihImport(agendaImporGoogle.map((_,i)=>i))} className="text-xs font-bold text-green-600 hover:underline">Semua</button><span className="text-gray-300">|</span><button onClick={()=>setAgendaTerpilihImport([])} className="text-xs font-bold text-gray-500 hover:underline">Batal</button></div></div>
-            <div className="flex-1 overflow-y-auto px-6 py-3"><ul className="divide-y divide-gray-100">{agendaImporGoogle.map((it,i)=><li key={i} className="py-3 flex items-center gap-3"><input type="checkbox" checked={agendaTerpilihImport.includes(i)} onChange={()=>setAgendaTerpilihImport(p=>p.includes(i)?p.filter(x=>x!==i):[...p,i])} className="w-4 h-4 text-green-600 rounded border-gray-300"/><div className="flex-1"><p className="text-sm font-bold text-gray-800">{it.keterangan}</p><p className="text-[10px] font-semibold text-green-600">{it.tanggal===it.tanggalSelesai?it.tanggal:`${it.tanggal} s/d ${it.tanggalSelesai}`}</p></div><span className="text-[8px] px-2 py-0.5 rounded-full font-bold bg-red-50 text-red-600 border border-red-100">LIBUR</span></li>)}</ul></div>
-            <div className="px-6 py-4 border-t flex justify-end gap-2"><button onClick={()=>setShowModalImport(false)} className="px-4 py-2.5 rounded-lg text-sm font-semibold border border-gray-300 text-gray-700 hover:bg-gray-50">Batal</button><button onClick={handleImportAgendaGoogle} disabled={!agendaTerpilihImport.length} className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold bg-green-600 hover:bg-green-700 text-white disabled:opacity-50"><Download className="w-4 h-4"/> Impor {agendaTerpilihImport.length}</button></div>
+            <div className="flex justify-between items-center px-6 py-4 border-b"><div className="flex items-center gap-3">{sumberImport==='google'?<Download className="w-5 h-5 text-green-600"/>:<FileSpreadsheet className="w-5 h-5 text-purple-600"/>}<div><h3 className="text-base font-bold text-gray-800">{sumberImport==='google'?'Impor Hari Libur Google':'Impor Data Kaldik dari Excel/CSV'}</h3><p className="text-[11px] text-gray-500">{agendaImporGoogle.length} agenda — TA {tahunAjaran}</p></div></div><button onClick={()=>setShowModalImport(false)} className="text-gray-400 hover:text-red-600"><X className="w-5 h-5"/></button></div>
+            <div className={`px-6 py-3 border-b ${sumberImport==='google'?'bg-green-50 border-green-100':'bg-purple-50 border-purple-100'}`}>
+              <p className={`text-[11px] ${sumberImport==='google'?'text-green-700':'text-purple-700'}`}>{sumberImport==='google'?'💡 Hari libur nasional & hari besar Indonesia. Data langsung tersimpan setelah diimpor.':'💡 Data hasil baca file yang diunggah. Periksa & centang baris yang mau disimpan.'}</p>
+              {importFileWarning&&<p className="text-[11px] text-amber-700 mt-1">⚠️ {importFileWarning}</p>}
+            </div>
+            <div className="px-6 py-3 bg-gray-50 border-b flex justify-between"><p className="text-xs font-semibold text-gray-500">{agendaTerpilihImport.length}/{agendaImporGoogle.length} terpilih</p><div className="flex gap-3"><button onClick={()=>setAgendaTerpilihImport(agendaImporGoogle.map((_,i)=>i))} className={`text-xs font-bold hover:underline ${sumberImport==='google'?'text-green-600':'text-purple-600'}`}>Semua</button><span className="text-gray-300">|</span><button onClick={()=>setAgendaTerpilihImport([])} className="text-xs font-bold text-gray-500 hover:underline">Batal</button></div></div>
+            <div className="flex-1 overflow-y-auto px-6 py-3"><ul className="divide-y divide-gray-100">{agendaImporGoogle.map((it,i)=><li key={i} className="py-3 flex items-center gap-3"><input type="checkbox" checked={agendaTerpilihImport.includes(i)} onChange={()=>setAgendaTerpilihImport(p=>p.includes(i)?p.filter(x=>x!==i):[...p,i])} className={`w-4 h-4 rounded border-gray-300 ${sumberImport==='google'?'text-green-600':'text-purple-600'}`}/><div className="flex-1"><p className="text-sm font-bold text-gray-800">{it.keterangan}</p><p className={`text-[10px] font-semibold ${sumberImport==='google'?'text-green-600':'text-purple-600'}`}>{it.tanggal===it.tanggalSelesai?it.tanggal:`${it.tanggal} s/d ${it.tanggalSelesai}`}</p></div><span className={`text-[8px] px-2 py-0.5 rounded-full font-bold border ${it.statusHari==='libur'?'bg-red-50 text-red-600 border-red-100':'bg-emerald-50 text-emerald-600 border-emerald-100'}`}>{it.statusHari==='libur'?'LIBUR':'EFEKTIF'}</span></li>)}</ul></div>
+            <div className="px-6 py-4 border-t flex justify-end gap-2"><button onClick={()=>setShowModalImport(false)} className="px-4 py-2.5 rounded-lg text-sm font-semibold border border-gray-300 text-gray-700 hover:bg-gray-50">Batal</button><button onClick={handleImportAgendaGoogle} disabled={!agendaTerpilihImport.length} className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold text-white disabled:opacity-50 ${sumberImport==='google'?'bg-green-600 hover:bg-green-700':'bg-purple-600 hover:bg-purple-700'}`}><Download className="w-4 h-4"/> Impor {agendaTerpilihImport.length}</button></div>
           </div>
         </div>
       )}

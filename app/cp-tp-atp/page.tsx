@@ -29,14 +29,6 @@ import {
 // - ATP BUKAN entitas baru — ATP adalah PEMETAAN TP (beserta materinya, otomatis
 //   ikut) ke kelas tertentu. Alokasi JP & pembagian semester TIDAK diisi di sini,
 //   itu diatur belakangan di halaman Prota & Promes.
-type CPUmum = {
-  id: string
-  mapelId: string
-  fase: string          // A, B, C, D, E, F
-  deskripsi: string      // Capaian Pembelajaran secara umum/menyeluruh untuk mapel & fase ini
-  createdAt: string
-}
-
 type CP = {
   id: string
   mapelId: string
@@ -195,8 +187,7 @@ export default function CpTpAtpPage() {
     : daftarMapel
   const [daftarRombel, setDaftarRombel] = useState<any[]>([])
 
-  // Data CP Umum / CP / Materi / TP / ATP
-  const [daftarCpUmum, setDaftarCpUmum] = useState<CPUmum[]>([])
+  // Data CP / Materi / TP / ATP
   const [daftarCp, setDaftarCp] = useState<CP[]>([])
   const [daftarMateri, setDaftarMateri] = useState<Materi[]>([])
   const [daftarTp, setDaftarTp] = useState<TP[]>([])
@@ -263,11 +254,6 @@ export default function CpTpAtpPage() {
   })()
   const [tahunAjaran, setTahunAjaran] = useState(defaultTahunAjaran)
   const [titiMangsaAtpInput, setTitiMangsaAtpInput] = useState('')
-
-  // ── Form CP Umum
-  const [formCpUmum, setFormCpUmum] = useState<Partial<CPUmum>>({})
-  const [editCpUmumId, setEditCpUmumId] = useState<string|null>(null)
-  const [showFormCpUmum, setShowFormCpUmum] = useState(false)
 
   // ── Form CP (per elemen)
   const [formCp, setFormCp] = useState<Partial<CP>>({})
@@ -343,7 +329,6 @@ export default function CpTpAtpPage() {
       }
       const sr = localStorage.getItem('master_rombel'); if (sr) setDaftarRombel(JSON.parse(sr))
 
-      const scu = localStorage.getItem(kunciTahun('data_cp_umum')); if (scu) setDaftarCpUmum(JSON.parse(scu))
       const scp = localStorage.getItem(kunciTahun('data_cp')); if (scp) setDaftarCp(JSON.parse(scp))
       const smt = localStorage.getItem(kunciTahun('data_materi')); if (smt) setDaftarMateri(JSON.parse(smt))
       const stp = localStorage.getItem(kunciTahun('data_tp')); if (stp) setDaftarTp(JSON.parse(stp))
@@ -359,32 +344,8 @@ export default function CpTpAtpPage() {
   // SUDAH pakai kunciTahun() -- akibatnya data yang baru disimpan seperti
   // "hilang" lagi setelah reload, karena tersimpan di kunci yang berbeda dari
   // yang dibaca. Diperbaiki di sini secara terpusat.
-  const KUNCI_TAHUN_CPTPATP = new Set(['data_cp', 'data_cp_umum', 'data_materi', 'data_tp', 'data_atp'])
+  const KUNCI_TAHUN_CPTPATP = new Set(['data_cp', 'data_materi', 'data_tp', 'data_atp'])
   const save = (key: string, data: any) => localStorage.setItem(KUNCI_TAHUN_CPTPATP.has(key) ? kunciTahun(key) : key, JSON.stringify(data))
-
-  // ─────────────────────────────────────────────────────────
-  // CP UMUM CRUD (Capaian Pembelajaran secara umum, per mapel & fase)
-  // ─────────────────────────────────────────────────────────
-  const handleSimpanCpUmum = () => {
-    if (!formCpUmum.mapelId || !formCpUmum.fase || !formCpUmum.deskripsi) {
-      alert('Lengkapi: Mapel, Fase, dan Deskripsi Capaian Pembelajaran Umum.'); return
-    }
-    if (editCpUmumId) {
-      const updated = daftarCpUmum.map(c => c.id === editCpUmumId ? { ...c, ...formCpUmum } as CPUmum : c)
-      setDaftarCpUmum(updated); save('data_cp_umum', updated)
-    } else {
-      const newCu: CPUmum = { id: 'cpu-'+Date.now(), createdAt: new Date().toISOString(), ...formCpUmum as any }
-      const updated = [...daftarCpUmum, newCu]
-      setDaftarCpUmum(updated); save('data_cp_umum', updated)
-    }
-    setFormCpUmum({}); setEditCpUmumId(null); setShowFormCpUmum(false)
-  }
-
-  const handleHapusCpUmum = (id: string) => {
-    if (!confirm('Hapus Capaian Pembelajaran Umum ini?')) return
-    const updated = daftarCpUmum.filter(c => c.id !== id)
-    setDaftarCpUmum(updated); save('data_cp_umum', updated)
-  }
 
   // ─────────────────────────────────────────────────────────
   // CP CRUD (per elemen — berlaku untuk satu fase, bukan satu kelas)
@@ -612,7 +573,6 @@ export default function CpTpAtpPage() {
   // Excel tetap lewat endpoint server (/api/download-cp-tp-atp-excel).
   // ─────────────────────────────────────────────────────────
   const siapkanDataCetak = () => {
-    const cpUmum = daftarCpUmum.filter(c => c.mapelId === filterMapelId && c.fase === filterFase)
     const cp = daftarCp.filter(c => c.mapelId === filterMapelId && c.fase === filterFase)
     const materi = daftarMateri.filter(m => m.mapelId === filterMapelId && m.fase === filterFase)
     const tp = daftarTp.filter(t => t.mapelId === filterMapelId && t.fase === filterFase)
@@ -644,7 +604,7 @@ export default function CpTpAtpPage() {
     const namaMapel = daftarMapel.find(m => m.id === filterMapelId)?.nama || ''
     const namaGuru = daftarGuru.find(g => g.id === filterGuruId)?.nama || ''
 
-    return { cpUmum, cp, materi, tp, atp, atpPerKelas, namaMapel, namaGuru }
+    return { cp, materi, tp, atp, atpPerKelas, namaMapel, namaGuru }
   }
 
   const handleDownloadPdf = async (mode: 'unduh' | 'preview' = 'unduh') => {
@@ -655,7 +615,7 @@ export default function CpTpAtpPage() {
       const autoTableMod: any = await import('jspdf-autotable')
       const autoTable = autoTableMod.default || autoTableMod
 
-      const { cpUmum, cp, tp, atpPerKelas, namaMapel, namaGuru } = siapkanDataCetak()
+      const { cp, tp, atpPerKelas, namaMapel, namaGuru } = siapkanDataCetak()
 
       // Teks alur (kolom ke-3) — satu blok berlanjut, dipisah per kelas dengan sub-judul,
       // nomor TIDAK reset di tiap kelas.
@@ -699,14 +659,7 @@ export default function CpTpAtpPage() {
       y += 5.5
       barisInfo('Mata Pelajaran', namaMapel, marginLeft, y)
       barisInfo('Tahun Ajaran', tahunAjaran, marginLeft + halfW, y)
-      y += 8
-
-      doc.text('Capaian Pembelajaran Umum', marginLeft, y)
-      y += 5.5
-      const cpUmumTeks = cpUmum.map(c => c.deskripsi).filter(Boolean).join(' ') || '-'
-      const cpUmumLines = doc.splitTextToSize(cpUmumTeks, contentWidth)
-      doc.text(cpUmumLines, marginLeft, y)
-      y += cpUmumLines.length * 4.6 + 4
+      y += 10
 
       const body: any[] = []
       if (cp.length === 0) {
@@ -807,11 +760,11 @@ export default function CpTpAtpPage() {
   const handleDownloadExcel = async () => {
     if (!filterMapelId || !filterFase) { alert('Pilih Mata Pelajaran dan Fase terlebih dahulu untuk download.'); return }
     setDownloadLoading(true)
-    const { cpUmum, cp, materi, tp, atp, atpPerKelas, namaMapel, namaGuru } = siapkanDataCetak()
+    const { cp, materi, tp, atp, atpPerKelas, namaMapel, namaGuru } = siapkanDataCetak()
     const payload = {
       namaSekolah, namaMapel, namaGuru, tahunAjaran,
       fase: filterFase,
-      cpUmum, cp, materi, tp, atp, atpPerKelas,
+      cp, materi, tp, atp, atpPerKelas,
       daftarMapel, daftarCp, daftarTp
     }
     try {
@@ -877,12 +830,6 @@ export default function CpTpAtpPage() {
     if (kelasTerurutAngka.length === 0) return kelasTerdaftar // fallback: urutan tak terbaca
     return hitungKolomKelas(filterFase, kelasTerurutAngka)
   }, [filterFase, kelasTerurutAngka, kelasTerdaftar])
-
-  const filteredCpUmum = useMemo(() =>
-    daftarCpUmum.filter(c =>
-      (!filterMapelId || c.mapelId === filterMapelId) &&
-      (!filterFase || c.fase === filterFase)
-    ), [daftarCpUmum, filterMapelId, filterFase])
 
   const filteredCp = useMemo(() =>
     daftarCp.filter(c =>
@@ -1069,89 +1016,6 @@ export default function CpTpAtpPage() {
         {tabUtama === 'cp' && (
           <fieldset disabled={!bolehEdit} className="space-y-8 border-0 p-0 m-0 min-w-0">
           <section className="space-y-8">
-
-            {/* ── CAPAIAN PEMBELAJARAN SECARA UMUM ── */}
-            <div className="space-y-4">
-              <div className="flex justify-between items-center">
-                <div>
-                  <h2 className="text-sm font-black text-slate-800">Capaian Pembelajaran Secara Umum</h2>
-                  <p className="text-[10px] text-slate-500 mt-0.5">Narasi CP menyeluruh untuk satu mata pelajaran & fase (tampil di kop dokumen, sebelum tabel CP per elemen).</p>
-                </div>
-                <button onClick={() => { setShowFormCpUmum(true); setEditCpUmumId(null); setFormCpUmum({ mapelId: filterMapelId, fase: filterFase }) }}
-                  className="flex items-center gap-2 bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-xl font-bold text-xs shadow transition">
-                  <Plus className="w-3.5 h-3.5" /> Tambah CP Umum
-                </button>
-              </div>
-
-              {showFormCpUmum && (
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-4">
-                  <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider">{editCpUmumId ? 'Edit' : 'Tambah'} Capaian Pembelajaran Umum</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Mata Pelajaran *</label>
-                      <select value={formCpUmum.mapelId||''} onChange={e => setFormCpUmum({...formCpUmum, mapelId: e.target.value})}
-                        className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-slate-500 bg-white">
-                        <option value="">-- Pilih --</option>
-                        {daftarMapelTampil.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Fase *</label>
-                      <select value={formCpUmum.fase||''} onChange={e => setFormCpUmum({...formCpUmum, fase: e.target.value})}
-                        className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-slate-500 bg-white">
-                        <option value="">-- Fase --</option>
-                        {FASE_OPTIONS.map(f => <option key={f} value={f}>Fase {f}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Deskripsi Capaian Pembelajaran Umum *</label>
-                    <textarea value={formCpUmum.deskripsi||''} onChange={e => setFormCpUmum({...formCpUmum, deskripsi: e.target.value})}
-                      placeholder="Tulis narasi CP menyeluruh untuk mapel & fase ini..."
-                      rows={5}
-                      className="w-full px-3 py-2.5 border rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-slate-500 resize-none" />
-                  </div>
-                  <div className="flex gap-2 justify-end">
-                    <button onClick={() => { setShowFormCpUmum(false); setEditCpUmumId(null); setFormCpUmum({}) }}
-                      className="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition">Batal</button>
-                    <button onClick={handleSimpanCpUmum}
-                      className="flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-white bg-slate-800 rounded-xl hover:bg-slate-900 transition">
-                      <Check className="w-3.5 h-3.5" /> Simpan
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="space-y-3">
-                {filteredCpUmum.length === 0 && (
-                  <div className="bg-white border border-slate-200 rounded-2xl py-10 text-center text-slate-400">
-                    <p className="text-xs font-semibold">Belum ada Capaian Pembelajaran Umum untuk filter ini.</p>
-                  </div>
-                )}
-                {filteredCpUmum.map(cu => {
-                  const namaMapelCu = daftarMapel.find(m => m.id === cu.mapelId)?.nama || '-'
-                  return (
-                    <div key={cu.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 space-y-2">
-                          <div className="flex flex-wrap gap-2 items-center">
-                            <span className="px-2.5 py-1 bg-slate-800 text-white text-[10px] font-black rounded-lg uppercase tracking-wider">{namaMapelCu}</span>
-                            <span className="px-2.5 py-1 bg-blue-50 text-blue-700 text-[10px] font-black rounded-lg">Fase {cu.fase}</span>
-                          </div>
-                          <p className="text-sm text-slate-700 font-medium leading-relaxed">{cu.deskripsi}</p>
-                        </div>
-                        <div className="flex gap-1 shrink-0">
-                          <button onClick={() => { setFormCpUmum(cu); setEditCpUmumId(cu.id); setShowFormCpUmum(true) }}
-                            className="p-2 text-slate-400 hover:text-[#6A197D] hover:bg-[#F7ECFA] rounded-lg transition"><Edit2 className="w-4 h-4" /></button>
-                          <button onClick={() => handleHapusCpUmum(cu.id)}
-                            className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"><Trash2 className="w-4 h-4" /></button>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
 
             {/* ── CAPAIAN PEMBELAJARAN PER ELEMEN ── */}
             <div className="space-y-4">
