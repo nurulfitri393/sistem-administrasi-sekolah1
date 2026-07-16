@@ -658,9 +658,11 @@ export default function CpTpAtpPage() {
       let judulDokumen = ''
       if (halaman === 'analisis') {
         // ═══════════════ ANALISIS CAPAIAN PEMBELAJARAN ═══════════════
-        // Satu baris per Lingkup Materi (bukan per CP) -- Elemen & Capaian Pembelajaran
-        // digabung (rowSpan) menaungi semua Materi miliknya, karena satu CP wajar punya
-        // beberapa Lingkup Materi dengan Tujuan Pembelajaran masing-masing yang berbeda.
+        // Satu baris per Lingkup Materi (bukan per CP). Elemen & Capaian Pembelajaran
+        // SENGAJA diulang di setiap baris (bukan digabung pakai rowSpan) -- rowSpan pada
+        // jspdf-autotable rusak kalau baris yang di-span itu terpotong ke halaman
+        // berikutnya (garis tabel & isi sel jadi hilang), jadi diulang saja per baris
+        // supaya border & isi selalu utuh walau tabelnya panjang lebih dari 1 halaman.
         judulDokumen = 'Analisis Capaian Pembelajaran'
         const y1 = tulisKopHalaman('ANALISIS CAPAIAN PEMBELAJARAN')
 
@@ -671,19 +673,10 @@ export default function CpTpAtpPage() {
           cp.forEach(c => {
             const materiUntukCp = materi.filter(m => m.cpId === c.id)
             const daftarBaris = materiUntukCp.length > 0 ? materiUntukCp : [null]
-            daftarBaris.forEach((m, i) => {
+            daftarBaris.forEach(m => {
               const tpUntukMateri = m ? tp.filter(t => t.materiId === m.id) : []
               const tpTeks = tpUntukMateri.length > 0 ? tpUntukMateri.map(t => `•  ${t.deskripsi}`).join('\n') : '-'
-              if (i === 0) {
-                bodyCp.push([
-                  { content: c.elemen || '-', rowSpan: daftarBaris.length, styles: { valign: 'top' } },
-                  { content: c.deskripsi, rowSpan: daftarBaris.length, styles: { valign: 'top' } },
-                  m ? m.nama : '-',
-                  tpTeks,
-                ])
-              } else {
-                bodyCp.push([m ? m.nama : '-', tpTeks])
-              }
+              bodyCp.push([c.elemen || '-', c.deskripsi, m ? m.nama : '-', tpTeks])
             })
           })
         }
@@ -699,8 +692,8 @@ export default function CpTpAtpPage() {
           ]],
           body: bodyCp,
           theme: 'grid',
-          styles: { font: 'times', fontSize: 10.5, cellPadding: 3, lineColor: [0, 0, 0], lineWidth: 0.15, valign: 'top' },
-          headStyles: { fillColor: [237, 227, 243], textColor: [30, 10, 40], font: 'times', fontStyle: 'bold' },
+          styles: { font: 'times', fontSize: 10.5, cellPadding: 3, lineColor: [0, 0, 0], lineWidth: 0.15, valign: 'top', textColor: [0, 0, 0] },
+          headStyles: { fillColor: [237, 227, 243], textColor: [0, 0, 0], font: 'times', fontStyle: 'bold' },
           columnStyles: {
             0: { cellWidth: contentWidth * 0.14 },
             1: { cellWidth: contentWidth * 0.30 },
