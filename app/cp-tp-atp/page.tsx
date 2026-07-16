@@ -658,17 +658,13 @@ export default function CpTpAtpPage() {
       let judulDokumen = ''
       if (halaman === 'analisis') {
         // ═══════════════ ANALISIS CAPAIAN PEMBELAJARAN ═══════════════
-        // Tiap CP dapat baris "header" SENDIRI berisi Elemen + Capaian Pembelajaran saja
-        // (Lingkup Materi & Tujuan Pembelajaran dikosongkan di baris itu) -- supaya tinggi
-        // baris header ini HANYA mengikuti kebutuhan CP-nya sendiri, tidak dipaksa ikut
-        // setinggi Tujuan Pembelajaran milik Materi pertama seperti desain sebelumnya
-        // (itu penyebab ruang kosong besar: paragraf CP yang panjang membuat SATU baris
-        // materi pertama jadi sangat tinggi, padahal isi kolom Materi/TP-nya sendiri
-        // pendek). Baris-baris Materi di bawahnya HANYA berisi Lingkup Materi + Tujuan
-        // Pembelajaran (Elemen/CP dikosongkan langsung di data, BUKAN rowSpan bawaan
-        // jspdf-autotable -- itu yang bikin garis & isi sel hilang kalau sel gabungan
-        // kepotong ke halaman lain), jadi tinggi tiap baris Materi murni mengikuti
-        // panjang Tujuan Pembelajarannya sendiri.
+        // Elemen & Capaian Pembelajaran ditulis SEKALI di baris Materi PERTAMA tiap CP
+        // (bukan baris header terpisah -- itu bikin blok Lingkup Materi/Tujuan
+        // Pembelajaran-nya selalu kosong-melompong, terlihat seperti data yang hilang).
+        // Baris Materi berikutnya kolom Elemen/CP-nya dikosongkan langsung di data (BUKAN
+        // rowSpan bawaan jspdf-autotable -- itu yang bikin garis & isi sel hilang kalau
+        // sel gabungan kepotong ke halaman lain) supaya terlihat menyatu lewat willDrawCell
+        // di bawah, TANPA ada baris yang isinya cuma kosong.
         judulDokumen = 'Analisis Capaian Pembelajaran'
         const y1 = tulisKopHalaman('ANALISIS CAPAIAN PEMBELAJARAN')
 
@@ -678,17 +674,16 @@ export default function CpTpAtpPage() {
         } else {
           cp.forEach(c => {
             const materiUntukCp = materi.filter(m => m.cpId === c.id)
-            if (materiUntukCp.length === 0) {
-              // Belum ada Materi sama sekali untuk CP ini -- cukup satu baris saja,
-              // tidak perlu baris header terpisah karena tidak ada apa pun di bawahnya.
-              bodyCp.push([c.elemen || '-', c.deskripsi, '-', '-'])
-              return
-            }
-            bodyCp.push([c.elemen || '-', c.deskripsi, '', ''])
-            materiUntukCp.forEach(m => {
-              const tpUntukMateri = tp.filter(t => t.materiId === m.id)
+            const daftarBaris = materiUntukCp.length > 0 ? materiUntukCp : [null]
+            daftarBaris.forEach((m, i) => {
+              const tpUntukMateri = m ? tp.filter(t => t.materiId === m.id) : []
               const tpTeks = tpUntukMateri.length > 0 ? tpUntukMateri.map(t => `•  ${t.deskripsi}`).join('\n') : '-'
-              bodyCp.push(['', '', m.nama, tpTeks])
+              bodyCp.push([
+                i === 0 ? (c.elemen || '-') : '',
+                i === 0 ? c.deskripsi : '',
+                m ? m.nama : '-',
+                tpTeks,
+              ])
             })
           })
         }
