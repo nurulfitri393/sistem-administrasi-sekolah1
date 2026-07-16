@@ -718,42 +718,69 @@ export default function CpTpAtpPage() {
         }
         const [lebarElemen, lebarCp, lebarMateri, lebarTp] = hitungLebarKolom()
 
+        const headAnalisis = [[
+          { content: 'Elemen', styles: { fontStyle: 'bold' as const, halign: 'center' as const } },
+          { content: 'Capaian Pembelajaran', styles: { fontStyle: 'bold' as const, halign: 'center' as const } },
+          { content: 'Lingkup Materi', styles: { fontStyle: 'bold' as const, halign: 'center' as const } },
+          { content: 'Tujuan Pembelajaran', styles: { fontStyle: 'bold' as const, halign: 'center' as const } },
+        ]]
+        const stylesAnalisis = { font: 'times', fontSize: 10.5, cellPadding: 3, lineColor: [0, 0, 0] as [number, number, number], lineWidth: 0.15, valign: 'top' as const, textColor: [0, 0, 0] as [number, number, number] }
+        const headStylesAnalisis = { fillColor: [237, 227, 243] as [number, number, number], textColor: [0, 0, 0] as [number, number, number], font: 'times', fontStyle: 'bold' as const }
+        const columnStylesAnalisis = {
+          0: { cellWidth: lebarElemen },
+          1: { cellWidth: lebarCp },
+          2: { cellWidth: lebarMateri },
+          3: { cellWidth: lebarTp },
+        }
+
+        // ── TAHAP 1: render UJI COBA ke dokumen sementara, cuma untuk tahu baris ke-i
+        // benar-benar jatuh di HALAMAN berapa. Tanpa ini, keputusan sembunyikan garis
+        // atas/bawah sel gabungan cuma bisa menebak dari data (baris berikutnya kosong
+        // atau tidak) tanpa tahu apakah baris berikutnya itu ternyata kepotong ke halaman
+        // LAIN -- kalau ternyata beda halaman, garis di ujung halaman jadi ikut hilang
+        // padahal seharusnya tetap ada (persis bug yang dilaporkan). Dengan tahu halaman
+        // pasti dari percobaan render ini, TAHAP 2 di bawah baru menggambar garis yang
+        // benar-benar akurat.
+        const halamanBaris: number[] = []
+        const docUjiCoba = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+        autoTable(docUjiCoba, {
+          startY: y1,
+          margin: { left: marginLeft, right: marginRight },
+          head: headAnalisis,
+          body: bodyCp,
+          theme: 'grid',
+          styles: stylesAnalisis,
+          headStyles: headStylesAnalisis,
+          columnStyles: columnStylesAnalisis,
+          didDrawCell: (data: any) => {
+            if (data.section === 'body' && data.row.index >= 0) halamanBaris[data.row.index] = data.pageNumber
+          },
+        })
+
+        // ── TAHAP 2: render SUNGGUHAN, dengan garis atas/bawah sel gabungan yang sudah
+        // pasti akurat karena sudah tahu persis baris mana ada di halaman mana.
         autoTable(doc, {
           startY: y1,
           margin: { left: marginLeft, right: marginRight },
-          head: [[
-            { content: 'Elemen', styles: { fontStyle: 'bold', halign: 'center' } },
-            { content: 'Capaian Pembelajaran', styles: { fontStyle: 'bold', halign: 'center' } },
-            { content: 'Lingkup Materi', styles: { fontStyle: 'bold', halign: 'center' } },
-            { content: 'Tujuan Pembelajaran', styles: { fontStyle: 'bold', halign: 'center' } },
-          ]],
+          head: headAnalisis,
           body: bodyCp,
           theme: 'grid',
-          styles: { font: 'times', fontSize: 10.5, cellPadding: 3, lineColor: [0, 0, 0], lineWidth: 0.15, valign: 'top', textColor: [0, 0, 0] },
-          headStyles: { fillColor: [237, 227, 243], textColor: [0, 0, 0], font: 'times', fontStyle: 'bold' },
-          columnStyles: {
-            0: { cellWidth: lebarElemen },
-            1: { cellWidth: lebarCp },
-            2: { cellWidth: lebarMateri },
-            3: { cellWidth: lebarTp },
-          },
-          // Kolom Elemen/Capaian Pembelajaran dibuat terlihat "menyatu" dari baris header
-          // sampai ke semua baris Materi di bawahnya -- garis BAWAH baris ini disembunyikan
-          // kalau baris BERIKUTNYA masih kosong di kolom yang sama (masih bagian dari CP
-          // yang sama), garis ATAS baris ini disembunyikan kalau baris ITU SENDIRI kosong
-          // (lanjutan). Semua murni dari isi data (bukan pelacakan halaman), jadi tidak
-          // bisa meleset walau kepotong ke halaman lain. row.spansMultiplePages (baris yang
-          // KONTEN-nya sendiri kepanjangan sampai disambung ke halaman lain) SENGAJA
-          // dikecualikan dari penyembunyian garis bawah, supaya garis di ujung halaman
-          // tidak pernah ikut hilang.
+          styles: stylesAnalisis,
+          headStyles: headStylesAnalisis,
+          columnStyles: columnStylesAnalisis,
           willDrawCell: (data: any) => {
             if (data.section !== 'body' || data.column.index > 1) return
             const kolom = data.column.index
             const i = data.row.index
-            const barisIni = i >= 0 ? bodyCp[i] : null
-            const barisBerikutnya = i >= 0 ? bodyCp[i + 1] : null
-            const bukanAwal = !!barisIni && barisIni[kolom] === ''
-            const bukanAkhir = !!barisBerikutnya && barisBerikutnya[kolom] === '' && !data.row.spansMultiplePages
+            if (i < 0) return // baris sendiri kepotong ke halaman lain -- biarkan garis normal, aman
+            const barisIni = bodyCp[i]
+            const barisBerikutnya = bodyCp[i + 1]
+            // Garis ATAS & BAWAH cuma disembunyikan kalau baris tetangganya (sebelum/
+            // sesudah) benar-benar ada di HALAMAN YANG SAMA (bukan cuma sama datanya) --
+            // itu inti perbaikannya, supaya garis di ujung halaman tidak pernah hilang.
+            const bukanAwal = barisIni[kolom] === '' && i > 0 && halamanBaris[i - 1] === halamanBaris[i]
+            const bukanAkhir = !!barisBerikutnya && barisBerikutnya[kolom] === '' &&
+              halamanBaris[i + 1] === halamanBaris[i]
             data.cell.styles.lineWidth = {
               top: bukanAwal ? 0 : 0.15,
               bottom: bukanAkhir ? 0 : 0.15,

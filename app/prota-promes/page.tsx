@@ -323,6 +323,10 @@ interface MingguKapasitas {
   mingguKe: number          // 1..5, posisi minggu dalam bulan tsb
   efektifLembaga: boolean   // status institusional (≤2 hari libur Sen-Jum)
   capacityJp: number        // JP riil yang bisa diajarkan minggu ini (dari jadwal, dikurangi hari libur)
+  blokHarian: number[]      // rincian JP per HARI mengajar yang efektif minggu ini (mis. [2,3] utk
+                             // Senin 2 JP + Rabu 3 JP, keduanya masuk) -- dipakai supaya alokasi JP
+                             // per baris TP di Promes selalu mengambil satu hari PENUH sekaligus
+                             // (2 atau 3), tidak pernah pecahan sisa sembarangan.
   warnaKegiatan?: string    // warna klasifikasi kegiatan Kaldik yang paling banyak muncul minggu ini (kalau tidak efektif)
   kegiatan?: string         // nama/keterangan kegiatan Kaldik yang membuat minggu ini tidak efektif
 }
@@ -425,18 +429,19 @@ function hitungMingguKapasitas(
       kegiatanHitungan.forEach((v, nama) => { if (v.count > maxCount) { maxCount = v.count; warnaKegiatan = v.warna; kegiatan = nama } })
 
       let capacityJp = 0
-      Object.keys(jpPerHari).forEach(k => {
-        const hariNum = Number(k)
+      const blokHarian: number[] = []
+      Object.keys(jpPerHari).map(Number).sort((a, b) => a - b).forEach(hariNum => {
         const tgl = addDays(senin, hariNum - 1)
         if (tgl >= mulai && tgl <= selesai && !hariLiburSet.has(toDateStr(tgl))) {
           capacityJp += jpPerHari[hariNum] || 0
+          if (jpPerHari[hariNum]) blokHarian.push(jpPerHari[hariNum])
         }
       })
 
       const pemilik = bulanPemilikMinggu(senin)
       const bulanKey = `${pemilik.tahun}-${String(pemilik.bulan + 1).padStart(2, '0')}`
       if (!hasil[bulanKey]) hasil[bulanKey] = []
-      hasil[bulanKey].push({ mingguKe: mingguKeDalamBulan(senin), efektifLembaga, capacityJp, warnaKegiatan, kegiatan })
+      hasil[bulanKey].push({ mingguKe: mingguKeDalamBulan(senin), efektifLembaga, capacityJp, blokHarian, warnaKegiatan, kegiatan })
     }
     senin = addDays(senin, 7)
   }
@@ -451,33 +456,41 @@ function klasifikasiMinggu(w: MingguKapasitas | undefined): StatusMinggu {
   return w.capacityJp > 0 ? 'abu' : 'hitam'
 }
 
-interface WeekFlat { key: string; bulan: string; mingguKe: number; status: StatusMinggu; capacityJp: number }
+interface WeekFlat { key: string; bulan: string; mingguKe: number; status: StatusMinggu; capacityJp: number; blokHarian: number[] }
 
 /** Distribusikan JP tiap baris TP (berurutan) ke minggu-minggu yang tersedia (weeksFlat), secara
- *  berurutan, memenuhi kapasitas tiap minggu sebelum lanjut ke minggu berikutnya. */
+ *  berurutan, memenuhi kapasitas tiap minggu sebelum lanjut ke minggu berikutnya.
+ *
+ *  Diambil per HARI MENGAJAR UTUH (blokHarian, mis. 2 atau 3 JP), BUKAN per satuan JP tunggal --
+ *  supaya angka yang tampil di tiap sel minggu di Promes SELALU salah satu dari nilai JP per-hari
+ *  jadwal aslinya (mis. selalu 2 atau 3, sesuai hari mana yang efektif minggu itu), tidak pernah
+ *  pecahan sisa acak (mis. "1") yang tidak sesuai jadwal hari manapun -- satu hari mengajar tidak
+ *  bisa "dipotong setengah" untuk disambung ke Tujuan Pembelajaran lain. Konsekuensinya, total JP
+ *  yang benar-benar teralokasi untuk satu baris TP bisa sedikit LEBIH dari angka JP yang diisi di
+ *  form (dibulatkan ke atas ke hari terakhir yang dipakai), sama seperti satu jam pelajaran nyata
+ *  yang tetap dipakai penuh walau materi selesai lebih cepat. */
 function distribusikanJp(
   weeksFlat: WeekFlat[],
   rows: { id: string; jp: number }[],
 ): { alokasi: Record<string, Record<string, number>>; totalDialokasikan: number } {
   const alokasi: Record<string, Record<string, number>> = {}
   let wi = 0
-  let sisaMinggu = weeksFlat[0]?.capacityJp || 0
+  let sisaBlok: number[] = [...(weeksFlat[0]?.blokHarian || [])]
   let totalDialokasikan = 0
 
   for (const row of rows) {
     let need = row.jp || 0
     alokasi[row.id] = {}
     while (need > 0 && wi < weeksFlat.length) {
-      if (sisaMinggu <= 0) {
+      if (sisaBlok.length === 0) {
         wi++
-        sisaMinggu = weeksFlat[wi]?.capacityJp || 0
+        sisaBlok = [...(weeksFlat[wi]?.blokHarian || [])]
         continue
       }
-      const pakai = Math.min(need, sisaMinggu)
-      alokasi[row.id][weeksFlat[wi].key] = (alokasi[row.id][weeksFlat[wi].key] || 0) + pakai
-      need -= pakai
-      sisaMinggu -= pakai
-      totalDialokasikan += pakai
+      const blok = sisaBlok.shift() as number
+      alokasi[row.id][weeksFlat[wi].key] = (alokasi[row.id][weeksFlat[wi].key] || 0) + blok
+      need -= blok
+      totalDialokasikan += blok
     }
   }
   return { alokasi, totalDialokasikan }
@@ -711,43 +724,37 @@ async function eksporProtaPDF(params: {
 
   type Cell = string | { content: string; styles: Record<string, unknown> }
   const body: Cell[][] = []
+  // Rentang baris [mulai, akhir] (indeks di `body`, inklusif) yang kolom Semester-nya
+  // harus terlihat "menyatu" (Semester 1/2 ditulis sekali di baris `mulai`, kosong di
+  // baris-baris sesudahnya sampai `akhir`). TIDAK pakai rowSpan bawaan jspdf-autotable
+  // (itu penyebab tabel "meloncat" ke halaman baru dengan banyak ruang kosong & garis
+  // hilang kalau sel gabungan kepotong halaman -- persis seperti dilaporkan) -- dibuat
+  // sendiri lewat willDrawCell di bawah, dengan render dua tahap supaya batas halaman
+  // yang sesungguhnya selalu tahu persis (garis di ujung halaman tidak pernah hilang).
+  const rentangSemester: { mulai: number; akhir: number }[] = []
   const tulisSemester = (semester: 'ganjil' | 'genap', label: string, cap: number) => {
     const rs = rows.filter(r => r.semester === semester)
     let total = 0
-    // Sel "Semester X" digabung (rowSpan) mencakup SEMUA baris TP semester ini
-    // DITAMBAH 3 baris ringkasan di bawahnya (Jumlah Jam Total/Efektif/Cadangan)
-    // -- jadi satu blok utuh sampai baris Jumlah Jam Cadangan, bukan cuma
-    // menaungi baris-baris TP saja.
-    const totalBarisSemester = Math.max(rs.length, 1) + 3
+    const mulai = body.length
     if (rs.length === 0) {
-      body.push([
-        { content: label, rowSpan: totalBarisSemester, styles: { textColor: [0, 0, 0] as unknown as string, valign: 'middle' as unknown as string } } as Cell,
-        '', '',
-        { content: '(Belum ada Tujuan Pembelajaran untuk semester ini)', styles: { textColor: [0, 0, 0] as unknown as string } },
-        '',
-      ])
+      body.push([label, '', '', { content: '(Belum ada Tujuan Pembelajaran untuk semester ini)', styles: { textColor: [0, 0, 0] as unknown as string } }, ''])
     }
     rs.forEach((r, i) => {
-      const baris: Cell[] = i === 0
-        ? [{ content: label, rowSpan: totalBarisSemester, styles: { textColor: [0, 0, 0] as unknown as string, valign: 'middle' as unknown as string } } as Cell,
-           r.elemen, r.materiNama, `${r.tpNomor ? r.tpNomor + ' - ' : ''}${r.tpDeskripsi}`, `${r.jp} JP`]
-        : [r.elemen, r.materiNama, `${r.tpNomor ? r.tpNomor + ' - ' : ''}${r.tpDeskripsi}`, `${r.jp} JP`]
-      body.push(baris)
+      body.push([
+        i === 0 ? label : '',
+        r.elemen, r.materiNama, `${r.tpNomor ? r.tpNomor + ' - ' : ''}${r.tpDeskripsi}`, `${r.jp} JP`,
+      ])
       total += r.jp
     })
     const cadangan = Math.max(0, cap - total)
-    // Kolom "Semester" DIHILANGKAN dari array baris-baris ini (bukan diisi '')
-    // karena sudah tercakup rowSpan sel "Semester X" di atas -- persis pola yang
-    // dipakai baris TP ke-2 dst (lihat `baris` di atas).
-    body.push(['', '', { content: `Jumlah Jam Total ${label}`, styles: { halign: 'right' as unknown as string } },
+    body.push(['', '', '', { content: `Jumlah Jam Total ${label}`, styles: { halign: 'right' as unknown as string } },
       { content: `${total} JP`, styles: { textColor: [0, 0, 0] as unknown as string } }])
-    body.push(['', '', { content: 'Jumlah Jam Efektif', styles: { halign: 'right' as unknown as string } },
+    body.push(['', '', '', { content: 'Jumlah Jam Efektif', styles: { halign: 'right' as unknown as string } },
       { content: `${cap} JP`, styles: {} }])
-    body.push(['', '', { content: 'Jumlah Jam Cadangan', styles: { halign: 'right' as unknown as string } },
+    body.push(['', '', '', { content: 'Jumlah Jam Cadangan', styles: { halign: 'right' as unknown as string } },
       { content: `${cadangan} JP`, styles: {} }])
-    // Baris kosong pemisah antar-semester -- di LUAR rowSpan "Semester X" (yang
-    // berhenti tepat di baris Jumlah Jam Cadangan), jadi kolom Semester tetap
-    // diisi '' seperti biasa (bukan dihilangkan) di baris ini.
+    rentangSemester.push({ mulai, akhir: body.length - 1 })
+    // Baris kosong pemisah antar-semester -- di LUAR rentang gabungan di atas.
     body.push(['', '', '', '', ''])
   }
   tulisSemester('ganjil', 'Semester 1', capJpSem1)
@@ -759,25 +766,66 @@ async function eksporProtaPDF(params: {
   const wSemester = 30, wElemen = 24, wMateri = 24, wJp = 30
   const wTp = contentWidth - (wSemester + wElemen + wMateri + wJp)
 
+  const headProta = [['Semester', 'Elemen', 'Materi', 'Tujuan Pembelajaran', 'Alokasi Waktu (JP)']]
+  const headStylesProta = { font: 'times', fillColor: [237, 227, 243] as [number, number, number], textColor: [0, 0, 0] as [number, number, number], fontStyle: 'bold' as const, fontSize: 14, halign: 'center' as const, valign: 'middle' as const, cellPadding: 3.5, lineColor: [0, 0, 0] as [number, number, number], lineWidth: 0.15 }
+  const bodyStylesProta = { font: 'times', fontSize: 12, valign: 'middle' as const, overflow: 'linebreak' as const, cellPadding: 3.2, lineColor: [0, 0, 0] as [number, number, number], lineWidth: 0.15, textColor: [0, 0, 0] as [number, number, number], fillColor: [255, 255, 255] as [number, number, number] }
+  const columnStylesProta = {
+    0: { cellWidth: wSemester, textColor: [0, 0, 0] as unknown as string },
+    1: { cellWidth: wElemen },
+    2: { cellWidth: wMateri },
+    3: { cellWidth: wTp },
+    4: { cellWidth: wJp, halign: 'center' as const },
+  }
+
+  // ── TAHAP 1: render UJI COBA ke dokumen sementara, cuma untuk tahu baris ke-i
+  // benar-benar jatuh di halaman berapa -- supaya TAHAP 2 di bawah bisa memutuskan
+  // sembunyikan garis atas/bawah kolom Semester dengan akurat (tidak menebak dari
+  // data doang), persis pola yang sudah terbukti benar di halaman CP/TP/ATP.
+  const halamanBarisProta: number[] = []
+  const docUjiProta = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+  autoTable(docUjiProta, {
+    startY: curY, theme: 'plain', head: headProta, body,
+    headStyles: headStylesProta, bodyStyles: bodyStylesProta, columnStyles: columnStylesProta,
+    tableWidth: contentWidth, margin: { left: mL, right: mR },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didDrawCell: (data: any) => {
+      if (data.section === 'body' && data.row.index >= 0) halamanBarisProta[data.row.index] = data.pageNumber
+    },
+  })
+
   autoTable(doc, {
     startY: curY,
     // theme 'plain' MATIKAN zebra-stripe bawaan jspdf-autotable (theme default
     // 'striped' tetap memberi warna selang-seling walau bodyStyles.fillColor
     // sudah diisi putih) -- badan tabel putih polos, ungu HANYA di header.
     theme: 'plain',
-    head: [['Semester', 'Elemen', 'Materi', 'Tujuan Pembelajaran', 'Alokasi Waktu (JP)']],
+    head: headProta,
     body,
-    headStyles: { font: 'times', fillColor: [237, 227, 243], textColor: [0, 0, 0], fontStyle: 'bold', fontSize: 14, halign: 'center', valign: 'middle', cellPadding: 3.5, lineColor: [0, 0, 0], lineWidth: 0.15 },
-    bodyStyles: { font: 'times', fontSize: 12, valign: 'middle', overflow: 'linebreak', cellPadding: 3.2, lineColor: [0, 0, 0], lineWidth: 0.15, textColor: [0, 0, 0], fillColor: [255, 255, 255] },
-    columnStyles: {
-      0: { cellWidth: wSemester, textColor: [0, 0, 0] as unknown as string },
-      1: { cellWidth: wElemen },
-      2: { cellWidth: wMateri },
-      3: { cellWidth: wTp },
-      4: { cellWidth: wJp, halign: 'center' },
-    },
+    headStyles: headStylesProta,
+    bodyStyles: bodyStylesProta,
+    columnStyles: columnStylesProta,
     tableWidth: contentWidth,
     margin: { left: mL, right: mR },
+    // Kolom Semester dibuat terlihat menyatu dari baris label sampai baris "Jumlah Jam
+    // Cadangan" -- garis atas/bawahnya cuma disembunyikan kalau baris tetangganya masih
+    // di RENTANG yang sama DAN benar-benar di HALAMAN yang sama (bukan cuma kebetulan
+    // sama-sama kosong), supaya garis di ujung halaman tidak pernah hilang.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    willDrawCell: (data: any) => {
+      if (data.section !== 'body' || data.column.index !== 0) return
+      const i = data.row.index
+      if (i < 0) return
+      const rentangIni = rentangSemester.find(r => i >= r.mulai && i <= r.akhir)
+      if (!rentangIni) return
+      const bukanAwal = i > rentangIni.mulai && halamanBarisProta[i - 1] === halamanBarisProta[i]
+      const bukanAkhir = i < rentangIni.akhir && halamanBarisProta[i + 1] === halamanBarisProta[i]
+      data.cell.styles.lineWidth = {
+        top: bukanAwal ? 0 : 0.15,
+        bottom: bukanAkhir ? 0 : 0.15,
+        left: 0.15,
+        right: 0.15,
+      }
+    },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didDrawPage: (data: any) => {
       doc.setFontSize(8.5); doc.setFont('times', 'italic'); doc.setTextColor(148, 163, 184)
@@ -922,12 +970,26 @@ async function eksporPromesPDF(params: {
   let no = 1
   let totalDialokasikan = 0
 
-  rows.forEach(r => {
+  // Status tiap kolom minggu dihitung SEKALI di sini (bukan di dalam loop baris TP) --
+  // statusnya murni dari kalender + jadwal mapel ini, TIDAK bergantung baris TP mana pun,
+  // jadi sama persis untuk semua baris. Dipakai supaya keterangan kegiatan Kaldik di
+  // kolom "hitam" (mis. "Libur Semester") cuma ditulis SEKALI di baris TP pertama, bukan
+  // diulang-ulang di setiap baris seperti sebelumnya.
+  const statusKolomMinggu: StatusMinggu[] = []
+  bulanList.forEach(bln => {
+    const bulanKey = getBulanKey(bln)
+    const list = weeksByBulan[bulanKey] || []
+    for (let m = 1; m <= 5; m++) statusKolomMinggu.push(klasifikasiMinggu(list.find(x => x.mingguKe === m)))
+  })
+
+  rows.forEach((r, rowIdx) => {
     const row: Cell[] = [String(no++), `${r.elemen} — ${r.materiNama}`, `${r.tpNomor ? r.tpNomor + ' - ' : ''}${r.tpDeskripsi}`, String(r.jp)]
+    let kolomMinggu = 0
     bulanList.forEach(bln => {
       const bulanKey = getBulanKey(bln)
       const list = weeksByBulan[bulanKey] || []
       for (let m = 1; m <= 5; m++) {
+        const idxKolomIni = kolomMinggu++
         const w = list.find(x => x.mingguKe === m)
         if (!w) {
           // Minggu ini memang TIDAK ADA di bulan tsb (mis. bulan yang cuma
@@ -936,7 +998,7 @@ async function eksporPromesPDF(params: {
           row.push({ content: '', styles: { fillColor: [20, 20, 20] as unknown as string } })
           continue
         }
-        const status = klasifikasiMinggu(w)
+        const status = statusKolomMinggu[idxKolomIni]
         const jp = alokasiMingguan[r.id]?.[`${bulanKey}::${m}`] || 0
         totalDialokasikan += jp
         // Minggu tidak efektif ("abu" ATAU "hitam") selalu pakai warna KEGIATAN ASLI
@@ -953,9 +1015,10 @@ async function eksporPromesPDF(params: {
         // efektif tapi sebagian hari mengajar masih lolos) ditulis "X Jp" supaya jelas itu
         // JP yang bisa dicapai minggu itu, bukan alokasi penuh. Minggu "hitam" (kapasitas
         // 0 sama sekali) tidak diisi angka JP -- cukup nama kegiatan Kaldik yang membuat
-        // minggu itu tidak efektif.
+        // minggu itu tidak efektif, DITULIS SEKALI SAJA di baris TP pertama (rowIdx===0),
+        // baris-baris lain dikosongkan & digabung visual lewat willDrawCell di bawah.
         const isiSel = status === 'hitam'
-          ? (w.kegiatan || '')
+          ? (rowIdx === 0 ? (w.kegiatan || '') : '')
           : (jp > 0 ? (status === 'abu' ? `${jp} Jp` : String(jp)) : '')
         row.push({ content: isiSel, styles: { halign: 'center' as unknown as string, fillColor: bg as unknown as string, textColor: fg as unknown as string, fontSize: (status === 'hitam' || status === 'abu') ? 6 : 11 } })
       }
@@ -1005,6 +1068,27 @@ async function eksporPromesPDF(params: {
     { cellWidth: wNo, halign: 'center' }, { cellWidth: wElemen }, { cellWidth: wTp }, { cellWidth: wJp, halign: 'center' },
   ]
   bulanList.forEach(() => { for (let i = 0; i < 5; i++) lebarKolom.push({ cellWidth: wWeek, halign: 'center' }) })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const columnStylesPromes = lebarKolom.reduce((acc: any, col, idx) => { acc[idx] = col; return acc }, {})
+  const headStylesPromes = { font: 'times', fillColor: [237, 227, 243] as [number, number, number], textColor: [0, 0, 0] as [number, number, number], fontStyle: 'bold' as const, fontSize: 10, halign: 'center' as const, valign: 'middle' as const, cellPadding: 2.8, lineColor: [0, 0, 0] as [number, number, number], lineWidth: 0.1 }
+  const bodyStylesPromes = { font: 'times', fontSize: 11, valign: 'middle' as const, overflow: 'linebreak' as const, cellPadding: 2.6, lineColor: [0, 0, 0] as [number, number, number], lineWidth: 0.1, textColor: [0, 0, 0] as [number, number, number], fillColor: [255, 255, 255] as [number, number, number] }
+
+  // ── TAHAP 1: render UJI COBA ke dokumen sementara, cuma untuk tahu baris TP ke-i
+  // jatuh di halaman berapa -- dipakai TAHAP 2 di bawah supaya penyembunyian garis
+  // atas/bawah kolom minggu "hitam" yang digabung akurat (tidak pernah menghilangkan
+  // garis di ujung halaman), persis pola yang sudah terbukti benar di halaman CP/TP/ATP
+  // & Prota.
+  const halamanBarisPromes: number[] = []
+  const docUjiPromes = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
+  autoTable(docUjiPromes, {
+    startY: curY, theme: 'plain', head: [headRow1, headRow2], body,
+    headStyles: headStylesPromes, bodyStyles: bodyStylesPromes, columnStyles: columnStylesPromes,
+    tableWidth: contentWidth, margin: { left: mL, right: mR },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    didDrawCell: (data: any) => {
+      if (data.section === 'body' && data.row.index >= 0) halamanBarisPromes[data.row.index] = data.pageNumber
+    },
+  })
 
   autoTable(doc, {
     startY: curY,
@@ -1015,12 +1099,35 @@ async function eksporPromesPDF(params: {
     theme: 'plain',
     head: [headRow1, headRow2],
     body,
-    headStyles: { font: 'times', fillColor: [237, 227, 243], textColor: [0, 0, 0], fontStyle: 'bold', fontSize: 10, halign: 'center', valign: 'middle', cellPadding: 2.8, lineColor: [0, 0, 0], lineWidth: 0.1 },
-    bodyStyles: { font: 'times', fontSize: 11, valign: 'middle', overflow: 'linebreak', cellPadding: 2.6, lineColor: [0, 0, 0], lineWidth: 0.1, textColor: [0, 0, 0], fillColor: [255, 255, 255] },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    columnStyles: lebarKolom.reduce((acc: any, col, idx) => { acc[idx] = col; return acc }, {}),
+    headStyles: headStylesPromes,
+    bodyStyles: bodyStylesPromes,
+    columnStyles: columnStylesPromes,
     tableWidth: contentWidth,
     margin: { left: mL, right: mR },
+    // Kolom minggu "hitam" (kalender penuh tidak efektif) dibuat menyatu secara VERTIKAL
+    // dari baris TP pertama sampai baris TP terakhir (keterangan kegiatan Kaldik-nya SAMA
+    // untuk semua baris, murni ikut kalender -- bukan rowSpan bawaan jspdf-autotable,
+    // supaya tidak rawan garis/isi hilang kalau kepotong halaman). Garis atas/bawah cuma
+    // disembunyikan kalau baris tetangganya masih baris TP (bukan baris ringkasan) DAN
+    // benar-benar di halaman yang sama.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    willDrawCell: (data: any) => {
+      if (data.section !== 'body' || data.column.index < 4) return
+      const idxKolomMinggu = data.column.index - 4
+      if (statusKolomMinggu[idxKolomMinggu] !== 'hitam') return
+      const i = data.row.index
+      if (i < 0 || i >= rows.length) return
+      const barisAtasAdalahTp = i > 0
+      const barisBawahAdalahTp = i < rows.length - 1
+      const bukanAwal = barisAtasAdalahTp && halamanBarisPromes[i - 1] === halamanBarisPromes[i]
+      const bukanAkhir = barisBawahAdalahTp && halamanBarisPromes[i + 1] === halamanBarisPromes[i]
+      data.cell.styles.lineWidth = {
+        top: bukanAwal ? 0 : 0.1,
+        bottom: bukanAkhir ? 0 : 0.1,
+        left: 0.1,
+        right: 0.1,
+      }
+    },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     didDrawPage: (data: any) => {
       doc.setFontSize(7.5); doc.setFont('times', 'italic'); doc.setTextColor(148, 163, 184)
@@ -1411,7 +1518,7 @@ export default function ProtaPromesPage() {
     bulanList.forEach(bln => {
       const bulanKey = getBulanKey(bln)
       ;(weeksByBulan[bulanKey] || []).forEach(w => {
-        weeksFlat.push({ key: `${bulanKey}::${w.mingguKe}`, bulan: bln, mingguKe: w.mingguKe, status: klasifikasiMinggu(w), capacityJp: w.capacityJp })
+        weeksFlat.push({ key: `${bulanKey}::${w.mingguKe}`, bulan: bln, mingguKe: w.mingguKe, status: klasifikasiMinggu(w), capacityJp: w.capacityJp, blokHarian: w.blokHarian })
       })
     })
 
