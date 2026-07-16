@@ -689,6 +689,17 @@ export default function CpTpAtpPage() {
         // dipanggil ulang karena dideklarasikan di dalam handleDownloadPdf.
         const barisSebelumnya: Record<number, { nilai: string; halaman: number } | null> = { 0: null, 1: null, 2: null }
 
+        // Dihitung SEKALI di depan (bukan bergantung ke halaman): baris ke-i pada kolom
+        // itu bernilai sama dengan baris ke-(i+1) atau tidak -- dipakai untuk menyembunyikan
+        // garis BAWAH baris ke-i supaya tidak ada garis di tengah blok gabungan. Kalau
+        // ternyata baris ke-(i+1) itu kebetulan jatuh di halaman baru, baris ke-i otomatis
+        // jadi baris PALING BAWAH pada halamannya -- kehilangan garis bawah di situ jauh
+        // lebih wajar dilihat (mepet ujung halaman) daripada garis nongol di tengah blok.
+        const menyatuDenganBerikutnya: boolean[][] = bodyCp.map((baris: any[], i: number) => {
+          const berikutnya = bodyCp[i + 1]
+          return [0, 1, 2].map(kolom => !!berikutnya && baris[kolom] === berikutnya[kolom])
+        })
+
         autoTable(doc, {
           startY: y1,
           margin: { left: marginLeft, right: marginRight },
@@ -710,16 +721,21 @@ export default function CpTpAtpPage() {
           },
           willDrawCell: (data: any) => {
             if (data.section !== 'body' || data.column.index > 2) return
+            const kolom = data.column.index
             const nilai = String(data.cell.raw ?? '')
-            const sebelumnya = barisSebelumnya[data.column.index]
-            if (sebelumnya && sebelumnya.nilai === nilai && sebelumnya.halaman === data.pageNumber) {
-              data.cell.text = []
-              // Sembunyikan garis ATAS supaya menyatu dengan baris di atasnya (efek sel
-              // gabungan) -- garis kiri/kanan/bawah tetap normal, jadi kotak tabelnya
-              // tetap utuh walau teksnya kosong.
-              data.cell.styles.lineWidth = { top: 0, bottom: 0.15, left: 0.15, right: 0.15 }
+            const sebelumnya = barisSebelumnya[kolom]
+            const lanjutanGabungan = !!sebelumnya && sebelumnya.nilai === nilai && sebelumnya.halaman === data.pageNumber
+            if (lanjutanGabungan) data.cell.text = []
+            // Baris terpotong (split ke halaman lain oleh autoTable) diberi index -1 --
+            // tidak ada acuan di array asli, jadi garis bawahnya dibiarkan normal (aman).
+            const gabungKeBawah = data.row.index >= 0 ? menyatuDenganBerikutnya[data.row.index]?.[kolom] : false
+            data.cell.styles.lineWidth = {
+              top: lanjutanGabungan ? 0 : 0.15,
+              bottom: gabungKeBawah ? 0 : 0.15,
+              left: 0.15,
+              right: 0.15,
             }
-            barisSebelumnya[data.column.index] = { nilai, halaman: data.pageNumber }
+            barisSebelumnya[kolom] = { nilai, halaman: data.pageNumber }
           },
         })
       } else {
