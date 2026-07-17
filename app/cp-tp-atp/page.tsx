@@ -658,14 +658,10 @@ export default function CpTpAtpPage() {
       let judulDokumen = ''
       if (halaman === 'analisis') {
         // ═══════════════ ANALISIS CAPAIAN PEMBELAJARAN ═══════════════
-        // Elemen diulang di SETIAP baris Materi (teksnya pendek, cuma 1-3 kata, jadi aman
-        // diulang tanpa memboroskan ruang atau mengganggu perhitungan tinggi baris) --
-        // supaya baris mana pun tetap ada konteks "ini bagian dari Elemen apa", termasuk
-        // kalau baris itu kebetulan mulai di halaman baru. Capaian Pembelajaran (paragraf
-        // panjang) tetap ditulis SEKALI saja di baris Materi PERTAMA tiap CP, baris
-        // berikutnya dikosongkan langsung di data (BUKAN rowSpan bawaan jspdf-autotable --
-        // itu yang bikin garis & isi sel hilang kalau sel gabungan kepotong ke halaman
-        // lain) supaya terlihat menyatu lewat willDrawCell di bawah.
+        // Elemen & Capaian Pembelajaran ditulis SEKALI di baris Materi PERTAMA tiap CP,
+        // baris berikutnya dikosongkan langsung di data (BUKAN rowSpan bawaan
+        // jspdf-autotable -- itu yang bikin garis & isi sel hilang kalau sel gabungan
+        // kepotong ke halaman lain) supaya terlihat menyatu lewat willDrawCell di bawah.
         judulDokumen = 'Analisis Capaian Pembelajaran'
         const y1 = tulisKopHalaman('ANALISIS CAPAIAN PEMBELAJARAN')
 
@@ -680,7 +676,7 @@ export default function CpTpAtpPage() {
               const tpUntukMateri = m ? tp.filter(t => t.materiId === m.id) : []
               const tpTeks = tpUntukMateri.length > 0 ? tpUntukMateri.map(t => `•  ${t.deskripsi}`).join('\n') : '-'
               bodyCp.push([
-                c.elemen || '-',
+                i === 0 ? (c.elemen || '-') : '',
                 i === 0 ? c.deskripsi : '',
                 m ? m.nama : '-',
                 tpTeks,
@@ -759,8 +755,14 @@ export default function CpTpAtpPage() {
         const columnStylesAnalisis = {
           0: { cellWidth: lebarElemen },
           1: { cellWidth: lebarCp },
-          2: { cellWidth: lebarMateri },
-          3: { cellWidth: lebarTp },
+          // Lingkup Materi & Tujuan Pembelajaran dirata-tengah VERTIKAL (bukan rata atas) --
+          // baris yang berbagi tempat dengan paragraf Capaian Pembelajaran yang panjang
+          // pasti jadi tinggi (CP-nya sendiri butuh ruang segitu), tapi isi Materi/TP di
+          // baris itu belum tentu sepanjang itu. Rata-tengah membuat sisa ruang kosong
+          // terbagi rata di atas & bawah teks, bukan menumpuk semua di bawah seolah ada
+          // yang kepotong/hilang.
+          2: { cellWidth: lebarMateri, valign: 'middle' as const },
+          3: { cellWidth: lebarTp, valign: 'middle' as const },
         }
 
         // ── TAHAP 1: render UJI COBA ke dokumen sementara, cuma untuk tahu baris ke-i
@@ -799,9 +801,8 @@ export default function CpTpAtpPage() {
           headStyles: headStylesAnalisis,
           columnStyles: columnStylesAnalisis,
           willDrawCell: (data: any) => {
-            // Hanya kolom Capaian Pembelajaran (1) yang digabung -- Elemen (0) sekarang
-            // selalu terisi di tiap baris (lihat komentar di atas), tidak perlu digabung.
-            if (data.section !== 'body' || data.column.index !== 1) return
+            // Kolom Elemen (0) & Capaian Pembelajaran (1) sama-sama digabung.
+            if (data.section !== 'body' || data.column.index > 1) return
             const kolom = data.column.index
             const i = data.row.index
             if (i < 0) return // baris sendiri kepotong ke halaman lain -- biarkan garis normal, aman
