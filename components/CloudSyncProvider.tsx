@@ -23,19 +23,33 @@ export default function CloudSyncProvider({ children }: { children: React.ReactN
 
   useEffect(() => {
     let selesai = false
+    let batasWaktuTerlewati = false
     initCloudSync()
       .then(hasil => {
         if (!hasil.ok) setErrorSinkron(hasil.error || 'Gagal terhubung ke cloud.')
+        // Penarikan data dari cloud ternyata baru selesai SETELAH batas waktu di bawah
+        // sudah lebih dulu membuka akses ke halaman (koneksi lambat) -- kalau data yang
+        // baru datang itu BERBEDA dari yang sudah ditampilkan, muat ulang SEKALI supaya
+        // seluruh halaman otomatis memakai data terbaru itu, tanpa pengguna perlu
+        // me-refresh manual berkali-kali sendiri (persis yang dikeluhkan: akun baru
+        // login harus di-refresh beberapa kali dulu baru semua fitur/data muncul benar).
+        // Hanya dilakukan kalau memang ada PERBEDAAN data -- supaya tidak memuat ulang
+        // sia-sia kalau ternyata data yang sudah tampil sebelumnya sudah sama persis.
+        if (batasWaktuTerlewati && hasil.ok && hasil.adaPerubahan) {
+          window.location.reload()
+        }
       })
       .finally(() => {
         selesai = true
         setSiap(true)
       })
-    // Jaga-jaga bila koneksi lambat/terputus, jangan biarkan pengguna
-    // terjebak di layar loading selamanya.
+    // Jaga-jaga bila koneksi lambat/terputus, jangan biarkan pengguna terjebak di layar
+    // loading selamanya -- tapi cukup lama supaya penarikan data pertama kali (akun baru
+    // login, localStorage masih kosong sama sekali) punya waktu wajar untuk selesai
+    // sebelum halaman "menyerah" dan ditampilkan dengan data yang mungkin belum lengkap.
     const batasWaktu = setTimeout(() => {
-      if (!selesai) setSiap(true)
-    }, 4000)
+      if (!selesai) { batasWaktuTerlewati = true; setSiap(true) }
+    }, 10000)
     return () => clearTimeout(batasWaktu)
   }, [])
 

@@ -54,6 +54,14 @@ export default function JadwalPelajaranPage() {
   const [daftarRombel, setDaftarRombel] = useState<any[]>([])
   const [daftarMapel, setDaftarMapel] = useState<any[]>([])
   const [daftarGuru, setDaftarGuru] = useState<any[]>([])
+  // Unit-unit tempat Guru yang sedang login ditugaskan (bisa lebih dari satu, mis. guru
+  // yang mengajar di SMP DAN SMA) -- dipakai supaya guru dengan penugasan LEBIH dari satu
+  // unit tetap bisa BERPINDAH antar unitnya sendiri, bukan terkunci permanen ke unit
+  // pertama saja seperti sebelumnya.
+  const unitIdsGuruSendiri = useMemo(() => {
+    if (!cakupanGuru?.guruId) return []
+    return daftarGuru.find(g => g.id === cakupanGuru.guruId)?.unitIds || []
+  }, [cakupanGuru, daftarGuru])
 
   // State Fitur Cari Guru & Rekap
   const [cariGuruId, setCariGuruId] = useState('')
@@ -560,9 +568,19 @@ export default function JadwalPelajaranPage() {
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">1. Lembaga / Unit</label>
                   {cakupanGuru ? (
-                    <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold bg-slate-50 text-slate-600">
-                      {daftarLembaga.find((u: any) => u.id === rppmUnitId)?.nama || 'Lembaga Pusat'} <span className="text-[9px] font-normal text-slate-400">(unit Anda)</span>
-                    </div>
+                    unitIdsGuruSendiri.length > 1 ? (
+                      <select value={rppmUnitId} onChange={e => setRppmUnitId(e.target.value)}
+                        className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D] bg-white">
+                        {unitIdsGuruSendiri.map((uid: string) => {
+                          const u = daftarLembaga.find(l => l.id === uid)
+                          return u ? <option key={uid} value={uid}>{u.nama}</option> : null
+                        })}
+                      </select>
+                    ) : (
+                      <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold bg-slate-50 text-slate-600">
+                        {daftarLembaga.find((u: any) => u.id === rppmUnitId)?.nama || 'Lembaga Pusat'} <span className="text-[9px] font-normal text-slate-400">(unit Anda)</span>
+                      </div>
+                    )
                   ) : (
                     <select value={rppmUnitId} onChange={e => setRppmUnitId(e.target.value)}
                       className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D] bg-white">

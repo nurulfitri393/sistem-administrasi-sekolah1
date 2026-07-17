@@ -59,6 +59,10 @@ function hapusLokalTanpaKirimUlang(key: string) {
 }
 
 const antrianKirim = new Map<string, ReturnType<typeof setTimeout>>()
+// Nilai TERBARU yang masih menunggu jeda debounce sebelum benar-benar terkirim ke cloud --
+// disimpan TERPISAH dari timer-nya supaya bisa dikirim SEKARANG JUGA (lihat flushSemuaPending)
+// tanpa harus menunggu setTimeout-nya berjalan.
+const nilaiPending = new Map<string, string | null>()
 
 // Lacak perubahan yang BARU SAJA dikirim oleh perangkat/tab INI sendiri --
 // supaya saat notifikasi realtime "memantul" balik (echo) dari perubahan kita
@@ -81,48 +85,101 @@ function apakahEchoPerubahanSendiri(key: string, value: string | null): boolean 
   return catatan.value === value
 }
 
+async function kirimSatuKeCloud(key: string, value: string | null) {
+  catatSebagaiPerubahanSendiri(key, value)
+  try {
+    if (value === null) {
+      await supabase.from('app_storage').delete().eq('key', key)
+    } else {
+      await supabase
+        .from('app_storage')
+        .upsert({ key, value, updated_at: new Date().toISOString() })
+    }
+  } catch (e) {
+    console.warn('[cloudSync] Gagal mengirim perubahan ke cloud untuk key:', key, e)
+  }
+}
+
 function kirimKeCloud(key: string, value: string | null) {
   if (harusDikecualikan(key)) return
 
   const timerLama = antrianKirim.get(key)
   if (timerLama) clearTimeout(timerLama)
+  nilaiPending.set(key, value)
 
   // Debounce singkat supaya ketikan cepat tidak membanjiri request ke cloud.
-  const timer = setTimeout(async () => {
+  const timer = setTimeout(() => {
     antrianKirim.delete(key)
-    catatSebagaiPerubahanSendiri(key, value)
-    try {
-      if (value === null) {
-        await supabase.from('app_storage').delete().eq('key', key)
-      } else {
-        await supabase
-          .from('app_storage')
-          .upsert({ key, value, updated_at: new Date().toISOString() })
-      }
-    } catch (e) {
-      console.warn('[cloudSync] Gagal mengirim perubahan ke cloud untuk key:', key, e)
-    }
+    nilaiPending.delete(key)
+    kirimSatuKeCloud(key, value)
   }, 400)
 
   antrianKirim.set(key, timer)
 }
 
 /**
+ * Kirim SEKARANG JUGA semua perubahan yang masih menunggu jeda debounce -- dipanggil saat
+ * halaman akan ditinggalkan (lihat pasangFlushSaatHalamanDitinggalkan di bawah).
+ *
+ * AKAR MASALAH yang diperbaiki: sebelum ini, perubahan localStorage baru benar-benar
+ * dikirim ke cloud 400ms KEMUDIAN (lewat setTimeout). Kalau pengguna langsung me-refresh
+ * atau menutup tab dalam jeda 400ms itu (sangat mungkin terjadi -- mis. simpan data lalu
+ * langsung refresh untuk mengecek), timer itu IKUT HANGUS bersama halaman sebelum sempat
+ * jalan -- perubahannya TIDAK PERNAH terkirim ke cloud sama sekali. Begitu halaman dimuat
+ * ulang, lib ini menarik data TERBARU dari cloud (yang masih data LAMA, sebelum perubahan
+ * tsb) dan menimpa localStorage dengan itu -- membuat data yang BARU SAJA disimpan terlihat
+ * "hilang otomatis". Ini paling terasa di akun yang BARU LOGIN karena localStorage-nya
+ * masih relatif kosong, jadi penarikan ulang itu terasa seperti "menghapus" data yang baru
+ * diisi, bukan sekadar tidak menambahkannya.
+ */
+function flushSemuaPending() {
+  if (antrianKirim.size === 0) return
+  antrianKirim.forEach((timer, key) => {
+    clearTimeout(timer)
+    kirimSatuKeCloud(key, nilaiPending.get(key) ?? null)
+    nilaiPending.delete(key)
+  })
+  antrianKirim.clear()
+}
+
+let flushListenerTerpasang = false
+function pasangFlushSaatHalamanDitinggalkan() {
+  if (flushListenerTerpasang || typeof window === 'undefined') return
+  flushListenerTerpasang = true
+  // 'pagehide' menutupi refresh, navigasi keluar, DAN menutup tab -- lebih konsisten
+  // didukung browser modern untuk kasus "halaman akan hilang" dibanding 'beforeunload'.
+  window.addEventListener('pagehide', flushSemuaPending)
+  // Jaga-jaga tambahan: kalau tab disembunyikan (pindah tab/aplikasi) tanpa benar-benar
+  // ditutup, tetap segera kirim -- tidak menunggu debounce yang mungkin baru jalan setelah
+  // pengguna balik lagi (atau malah tidak pernah balik).
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushSemuaPending()
+  })
+}
+
+/**
  * Menarik seluruh data terbaru dari cloud ke localStorage perangkat ini.
  * Bisa dipanggil berkali-kali (dipanggil ulang setiap ada yang login).
  * Mengembalikan status supaya bisa ditampilkan ke pengguna kalau gagal
- * (sebelumnya kegagalan ini cuma console.warn, tidak pernah terlihat).
+ * (sebelumnya kegagalan ini cuma console.warn, tidak pernah terlihat), DAN
+ * `adaPerubahan` (apakah ada key yang nilainya benar-benar berbeda dari yang
+ * sudah ada di localStorage sebelum penarikan ini) -- dipakai CloudSyncProvider
+ * untuk tahu apakah perlu memberi tahu pengguna/memuat ulang setelah penarikan
+ * yang tadinya lambat akhirnya selesai di latar belakang.
  */
-export async function tarikDataDariCloud(): Promise<{ ok: boolean; error?: string }> {
+export async function tarikDataDariCloud(): Promise<{ ok: boolean; error?: string; adaPerubahan?: boolean }> {
   if (typeof window === 'undefined') return { ok: false, error: 'Bukan lingkungan browser.' }
   try {
     const { data, error } = await supabase.from('app_storage').select('key, value')
     if (!error && data) {
+      let adaPerubahan = false
       for (const row of data as { key: string; value: string | null }[]) {
         if (harusDikecualikan(row.key)) continue
-        tulisLokalTanpaKirimUlang(row.key, row.value ?? '')
+        const nilaiBaru = row.value ?? ''
+        if (window.localStorage.getItem(row.key) !== nilaiBaru) adaPerubahan = true
+        tulisLokalTanpaKirimUlang(row.key, nilaiBaru)
       }
-      return { ok: true }
+      return { ok: true, adaPerubahan }
     } else if (error) {
       console.warn('[cloudSync] Tabel app_storage belum siap / gagal diakses:', error.message)
       return { ok: false, error: error.message }
@@ -147,6 +204,7 @@ function pasangPenyadapLocalStorage() {
     originalRemoveItem(key)
     kirimKeCloud(key, null)
   }
+  pasangFlushSaatHalamanDitinggalkan()
   sudahDipasang = true
 }
 
@@ -197,7 +255,7 @@ function pasangRealtimeSubscription() {
  *    selanjutnya otomatis terkirim ke cloud.
  * 3) Berlangganan perubahan real-time dari perangkat/akun lain.
  */
-export async function initCloudSync(): Promise<{ ok: boolean; error?: string }> {
+export async function initCloudSync(): Promise<{ ok: boolean; error?: string; adaPerubahan?: boolean }> {
   if (typeof window === 'undefined') return { ok: false, error: 'Bukan lingkungan browser.' }
   const hasil = await tarikDataDariCloud()
   pasangPenyadapLocalStorage()

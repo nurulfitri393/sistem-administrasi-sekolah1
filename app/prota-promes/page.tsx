@@ -1204,6 +1204,14 @@ export default function ProtaPromesPage() {
   const [daftarAtpPeta, setDaftarAtpPeta] = useState<AtpPeta[]>([])
 
   const [daftarGuru, setDaftarGuru] = useState<Guru[]>([])
+  // Unit-unit tempat Guru yang sedang login ditugaskan (bisa lebih dari satu, mis. guru
+  // yang mengajar di SMP DAN SMA) -- dipakai supaya guru dengan penugasan LEBIH dari satu
+  // unit tetap bisa BERPINDAH antar unitnya sendiri, bukan terkunci permanen ke unit
+  // pertama saja seperti sebelumnya.
+  const unitIdsGuruSendiri = useMemo(() => {
+    if (!cakupanGuru?.guruId) return []
+    return daftarGuru.find(g => g.id === cakupanGuru.guruId)?.unitIds || []
+  }, [cakupanGuru, daftarGuru])
   const [daftarMapel, setDaftarMapel] = useState<Mapel[]>([])
   const [daftarRombel, setDaftarRombel] = useState<Rombel[]>([])
   const [matriksJp, setMatriksJp] = useState<Record<string, string>>({})
@@ -1796,9 +1804,19 @@ export default function ProtaPromesPage() {
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">1. Lembaga / Unit</label>
               {cakupanGuru ? (
-                <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-slate-50 font-semibold text-slate-600">
-                  {daftarLembaga.find(u => u.id === filterUnitId)?.nama || 'Lembaga Pusat'} <span className="text-[9px] font-normal text-slate-400">(unit Anda)</span>
-                </div>
+                unitIdsGuruSendiri.length > 1 ? (
+                  <select value={filterUnitId} onChange={e => setFilterUnitId(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-[#6A197D]">
+                    {unitIdsGuruSendiri.map((uid: string) => {
+                      const u = daftarLembaga.find(l => l.id === uid)
+                      return u ? <option key={uid} value={uid}>{u.nama}</option> : null
+                    })}
+                  </select>
+                ) : (
+                  <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-slate-50 font-semibold text-slate-600">
+                    {daftarLembaga.find(u => u.id === filterUnitId)?.nama || 'Lembaga Pusat'} <span className="text-[9px] font-normal text-slate-400">(unit Anda)</span>
+                  </div>
+                )
               ) : (
                 <select value={filterUnitId} onChange={e => setFilterUnitId(e.target.value)}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-[#6A197D]">
@@ -1806,7 +1824,9 @@ export default function ProtaPromesPage() {
                   {daftarLembaga.map(u => <option key={u.id} value={u.id}>{u.nama}</option>)}
                 </select>
               )}
-              <p className="text-[9px] text-slate-400 mt-1">Menentukan Guru/Kelas yang muncul, serta Kepala Sekolah/Mudir di tanda tangan.</p>
+              <p className="text-[9px] text-slate-400 mt-1">
+                {unitIdsGuruSendiri.length > 1 ? 'Anda ditugaskan di lebih dari satu unit -- pilih unit yang ingin diisi/dilihat sekarang.' : 'Menentukan Guru/Kelas yang muncul, serta Kepala Sekolah/Mudir di tanda tangan.'}
+              </p>
             </div>
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">2. Guru</label>

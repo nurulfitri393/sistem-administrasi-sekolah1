@@ -203,6 +203,15 @@ export default function CpTpAtpPage() {
   const [filterUnitId, setFilterUnitId] = useState('') // '' = Lembaga Pusat (Mudir)
   const [daftarLembaga, setDaftarLembaga] = useState<any[]>([])
 
+  // Unit-unit tempat Guru yang sedang login ditugaskan (bisa lebih dari satu, mis. guru
+  // yang mengajar di SMP DAN SMA) -- dipakai supaya guru dengan penugasan LEBIH dari satu
+  // unit tetap bisa BERPINDAH antar unitnya sendiri (lihat selector di bawah), bukan
+  // terkunci permanen ke unit pertama saja seperti sebelumnya.
+  const unitIdsGuruSendiri = useMemo(() => {
+    if (!cakupanGuru?.guruId) return []
+    return daftarGuru.find(g => g.id === cakupanGuru.guruId)?.unitIds || []
+  }, [cakupanGuru, daftarGuru])
+
   // ── Alur seleksi berjenjang: Unit -> Fase -> Guru Pengampu -> Mata Pelajaran ──
   // 1) Fase yang muncul mengikuti jenjang Unit yang dipilih (Lembaga Pusat =
   //    gabungan semua jenjang unit yang terdaftar; unit tertentu = jenjang unit itu saja).
@@ -1136,6 +1145,17 @@ export default function CpTpAtpPage() {
     daftarAtp.filter(a => (!filterMapelId || a.mapelId === filterMapelId) && (!filterFase || a.fase === filterFase)),
     [daftarAtp, filterMapelId, filterFase])
 
+  // Dipakai KHUSUS oleh tab Rekap ATP -- daftarAtp sendiri berisi SEMUA mapel/fase yang
+  // pernah diisi siapapun untuk tahun ajaran ini (data mentah, tidak difilter). Untuk akun
+  // Guru, itu harus dibatasi HANYA ke mapel yang memang diampu guru tsb (cakupanGuru.mapelIds)
+  // -- tanpa ini, Rekap ATP menampilkan data mapel/guru LAIN yang tidak ada hubungannya sama
+  // sekali dengan akun yang sedang login (persis bug "Rekap ATP antar pelajaran dan antar
+  // akun bercampur" yang dilaporkan). Admin (cakupanGuru null) tetap melihat semuanya, sesuai
+  // perannya yang memang mengelola seluruh mapel.
+  const daftarAtpUntukRekap = useMemo(() =>
+    cakupanGuru ? daftarAtp.filter(a => cakupanGuru.mapelIds.includes(a.mapelId)) : daftarAtp,
+    [daftarAtp, cakupanGuru])
+
   const entriKelas = (kelas: string) =>
     filteredAtp.filter(a => a.kelas === kelas).sort((a,b) => a.urutanDiKelas - b.urutanDiKelas)
 
@@ -1178,9 +1198,19 @@ export default function CpTpAtpPage() {
             <div>
               <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">1. Lembaga / Unit</label>
               {cakupanGuru ? (
-                <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold bg-slate-50 text-slate-600">
-                  {daftarLembaga.find(u => u.id === filterUnitId)?.nama || 'Lembaga Pusat'} <span className="text-[9px] font-normal text-slate-400">(unit Anda)</span>
-                </div>
+                unitIdsGuruSendiri.length > 1 ? (
+                  <select value={filterUnitId} onChange={e => setFilterUnitId(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
+                    {unitIdsGuruSendiri.map((uid: string) => {
+                      const u = daftarLembaga.find(l => l.id === uid)
+                      return u ? <option key={uid} value={uid}>{u.nama}</option> : null
+                    })}
+                  </select>
+                ) : (
+                  <div className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold bg-slate-50 text-slate-600">
+                    {daftarLembaga.find(u => u.id === filterUnitId)?.nama || 'Lembaga Pusat'} <span className="text-[9px] font-normal text-slate-400">(unit Anda)</span>
+                  </div>
+                )
               ) : (
                 <select value={filterUnitId} onChange={e => setFilterUnitId(e.target.value)}
                   className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-white">
@@ -1188,7 +1218,9 @@ export default function CpTpAtpPage() {
                   {daftarLembaga.map(u => <option key={u.id} value={u.id}>{u.nama}</option>)}
                 </select>
               )}
-              <p className="text-[9px] text-slate-400 mt-1">Menentukan Fase, Guru Pengampu, serta Kepala Sekolah/Mudir yang tercantum di tanda tangan.</p>
+              <p className="text-[9px] text-slate-400 mt-1">
+                {unitIdsGuruSendiri.length > 1 ? 'Anda ditugaskan di lebih dari satu unit -- pilih unit yang ingin diisi/dilihat sekarang.' : 'Menentukan Fase, Guru Pengampu, serta Kepala Sekolah/Mudir yang tercantum di tanda tangan.'}
+              </p>
             </div>
             <div>
               <label className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider mb-1.5 block">2. Fase</label>
@@ -1830,25 +1862,25 @@ export default function CpTpAtpPage() {
               <h2 className="text-sm font-black text-slate-800">Rekap ATP — Semua Mapel & Fase</h2>
               <p className="text-[10px] text-slate-500 mt-0.5">Nomor urut berlanjut lintas kelas dalam satu fase (mis. Kelas VII 1–10, lanjut Kelas VIII 11–15, dst).</p>
             </div>
-            {daftarAtp.length === 0 ? (
+            {daftarAtpUntukRekap.length === 0 ? (
               <div className="py-16 text-center text-slate-400 text-sm">Belum ada TP yang dipetakan ke kelas. Buka tab ATP untuk memetakan TP ke kelas.</div>
             ) : (
               (() => {
-                const kombinasi = new Set(daftarAtp.map(a => `${a.mapelId}||${a.fase}`))
+                const kombinasi = new Set(daftarAtpUntukRekap.map(a => `${a.mapelId}||${a.fase}`))
                 return Array.from(kombinasi).sort().map(key => {
                   const [mapelId, fase] = key.split('||')
                   const namaMapelRekap = daftarMapel.find(m => m.id === mapelId)?.nama || mapelId
 
                   // Urutkan kelas sesuai posisi kolom baku (SD/SMP/SMA), lalu tambahkan
                   // kelas lain yang mungkin tak masuk bucket standar di akhir.
-                  const kelasDenganEntri = Array.from(new Set(daftarAtp.filter(a => a.mapelId === mapelId && a.fase === fase).map(a => a.kelas)))
+                  const kelasDenganEntri = Array.from(new Set(daftarAtpUntukRekap.filter(a => a.mapelId === mapelId && a.fase === fase).map(a => a.kelas)))
                   const urutanBaku = hitungKolomKelas(fase, kelasTerurutAngka).filter(k => kelasDenganEntri.includes(k))
                   const kelasLain = kelasDenganEntri.filter(k => !urutanBaku.includes(k)).sort()
                   const urutanKelas = [...urutanBaku, ...kelasLain]
 
                   let counter = 0
                   const blok = urutanKelas.map(kelas => {
-                    const items = daftarAtp
+                    const items = daftarAtpUntukRekap
                       .filter(a => a.mapelId === mapelId && a.fase === fase && a.kelas === kelas)
                       .sort((a,b) => a.urutanDiKelas - b.urutanDiKelas)
                       .map(a => { counter++; return { ...a, nomorGlobal: counter } })
