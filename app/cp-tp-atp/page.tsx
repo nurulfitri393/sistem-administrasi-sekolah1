@@ -761,33 +761,37 @@ export default function CpTpAtpPage() {
 
         const bodyCp: any[] = []
         // Per baris di bodyCp: apakah ini baris AWAL/AKHIR grup CP-nya (Elemen & Capaian
-        // Pembelajaran selalu mengisi rentang baris yang SAMA PERSIS -- satu grup Materi).
-        const infoGrup: { awal: boolean; akhir: boolean }[] = []
+        // Pembelajaran selalu mengisi rentang baris yang SAMA PERSIS -- satu grup Materi),
+        // dan grupIdx untuk mencari balik teks CP UTUH milik grup itu (dipakai saat
+        // menggambar manual supaya CP mengalir tanpa celah -- lihat alurGambarCp di bawah).
+        const infoGrup: { awal: boolean; akhir: boolean; grupIdx: number }[] = []
+        // Teks Capaian Pembelajaran UTUH (belum dipotong-potong per baris) per grup --
+        // dipakai HANYA untuk menggambar manual (alurGambarCp), bukan untuk hitung tinggi.
+        const barisTeksCpPerGrup: string[][] = []
 
         if (grupCp.length === 0) {
           bodyCp.push(['-', '-', '-', '-'])
-          infoGrup.push({ awal: true, akhir: true })
+          infoGrup.push({ awal: true, akhir: true, grupIdx: 0 })
+          barisTeksCpPerGrup.push([])
         } else {
-          grupCp.forEach(g => {
+          grupCp.forEach((g, gi) => {
             const jumlahBaris = g.barisMateri.length
             const tinggiAlami = g.barisMateri.map(b =>
               Math.max(tinggiDariJumlahBaris(bungkusTeks(b.materiNama, lebarMateri).length), tinggiDariJumlahBaris(bungkusTeks(b.tpTeks, lebarTp).length))
             )
             const barisTeksCp = bungkusTeks(g.cpDeskripsi, lebarCp)
+            barisTeksCpPerGrup.push(barisTeksCp)
 
             // Kapasitas baris ke-k = berapa baris teks CP yang MASIH MUAT tanpa
             // membuat baris itu lebih tinggi dari kebutuhan Materi/TP-nya SENDIRI --
             // dihitung dari tinggi alami baris itu (bukan persentase/proporsi dari
             // total grup). Dengan ini tinggi kotak Lingkup Materi & Tujuan
             // Pembelajaran MURNI mengikuti isinya sendiri, tidak pernah ditarik naik
-            // oleh Capaian Pembelajaran.
-            // Padding atas/bawah KHUSUS kolom Capaian Pembelajaran dibuat 0 di batas
-            // antar-baris DALAM grup yang sama (cuma baris paling awal & paling akhir
-            // grup yang tetap pakai padding 3mm) -- lihat penerapannya di didParseCell
-            // TAHAP 1 & 2 di bawah. Tanpa ini, tiap baris tetap punya padding-bawah
-            // sendiri + padding-atas baris berikutnya (jadi total ~6mm kosong) tepat
-            // di titik sambungnya, membuat satu paragraf CP yang menyambung terlihat
-            // seperti terbagi jadi beberapa blok terpisah walau garis sudah disembunyikan.
+            // oleh Capaian Pembelajaran. INI CUMA DIPAKAI UNTUK HITUNG TINGGI BARIS
+            // (layout) -- teks yang SUNGGUHAN DIGAMBAR memakai alurGambarCp (mengalir
+            // tanpa sisa/celah antar baris, lihat TAHAP 2 di bawah), supaya sisa
+            // pembulatan ke bawah di satu baris tidak terbuang tapi "dibawa" ke baris
+            // berikutnya dalam grup yang sama.
             const kapasitasBaris = tinggiAlami.map((tinggi, k) => {
               const topPad = k === 0 ? 3 : 0
               const botPad = k === jumlahBaris - 1 ? 3 : 0
@@ -797,12 +801,6 @@ export default function CpTpAtpPage() {
             let idxCp = 0
             const potonganCp: string[][] = tinggiAlami.map((_, k) => {
               if (k === jumlahBaris - 1) {
-                // Baris TERAKHIR grup menampung SISA teks CP apa adanya (jaminan
-                // tidak ada teks yang hilang). Tinggi kotak Capaian Pembelajaran
-                // (gabungan seluruh baris grup) otomatis mengikuti tinggi gabungan
-                // Materi+TP yang sudah menyesuaikan isinya sendiri -- kalau CP masih
-                // tersisa banyak di titik ini, hanya baris terakhir ini yang ikut
-                // sedikit lebih tinggi, bukan seluruh baris di grup.
                 const potongan = barisTeksCp.slice(idxCp)
                 idxCp = barisTeksCp.length
                 return potongan
@@ -820,7 +818,7 @@ export default function CpTpAtpPage() {
                 b.materiNama,
                 b.tpTeks,
               ])
-              infoGrup.push({ awal: k === 0, akhir: k === jumlahBaris - 1 })
+              infoGrup.push({ awal: k === 0, akhir: k === jumlahBaris - 1, grupIdx: gi })
             })
           })
         }
@@ -904,6 +902,8 @@ export default function CpTpAtpPage() {
         // ── TAHAP 2: render SUNGGUHAN, dengan garis atas/bawah sel gabungan yang sudah
         // pasti akurat karena sudah tahu persis baris mana ada di halaman mana -- termasuk
         // baris yang isinya sendiri terpotong dua halaman.
+        // State aliran gambar manual kolom Capaian Pembelajaran -- lihat didDrawCell.
+        let alurGambarCp: { grupIdx: number; topY: number; halaman: number; jumlahDipakai: number } | null = null
         autoTable(doc, {
           startY: y1,
           margin: { left: marginLeft, right: marginRight },
@@ -938,6 +938,58 @@ export default function CpTpAtpPage() {
               left: 0.15,
               right: 0.15,
             }
+            // Kolom Capaian Pembelajaran (1) digambar MANUAL lewat alurGambarCp di
+            // didDrawCell di bawah -- teks bawaan sel ini disembunyikan dulu di sini
+            // (dikosongkan) supaya tidak digambar dua kali / tumpang tindih.
+            if (data.column.index === 1) data.cell.text = []
+          },
+          didDrawCell: (data: any) => {
+            // ── Menggambar MANUAL teks Capaian Pembelajaran supaya MENGALIR TERUS
+            // tanpa celah antar baris (bukan dipotong-potong lalu masing-masing
+            // dirata-atas di selnya sendiri, yang selalu menyisakan sisa pembulatan
+            // di tiap batas baris). Prinsipnya: anggap satu grup CP (dalam SATU
+            // halaman yang sama) sebagai SATU aliran vertikal berkelanjutan -- baris
+            // ke berapa pun teksnya "jatuh", tetap digambar tanpa mereset sisa
+            // pembulatan baris sebelumnya (beda dengan kapasitasBaris di atas yang
+            // dipakai HANYA untuk menghitung tinggi baris/layout, bukan untuk gambar).
+            if (data.section !== 'body' || data.column.index !== 1) return
+            const i = data.row.index
+            if (i < 0 || data.row.spansMultiplePages) return
+            const info = infoGrup[i]
+            const halamanIni = data.pageNumber
+            // Reset titik awal aliran kalau ini baris AWAL grup, ATAU kalau baris ini
+            // ternyata mendarat di HALAMAN BARU dibanding baris sebelumnya dalam grup
+            // yang sama (grup terpotong ke halaman lain) -- karena sistem koordinat Y
+            // jsPDF mulai lagi dari atas tiap halaman baru, akumulasi tinggi lintas
+            // halaman tidak bisa "dibawa".
+            if (info.awal || !alurGambarCp || alurGambarCp.grupIdx !== info.grupIdx || alurGambarCp.halaman !== halamanIni) {
+              alurGambarCp = { grupIdx: info.grupIdx, topY: data.cell.y, halaman: halamanIni, jumlahDipakai: 0 }
+            }
+            const semuaBarisCp = barisTeksCpPerGrup[info.grupIdx]
+            const rowBottom = data.cell.y + data.cell.height
+            // Kesempatan terakhir untuk grup+halaman aliran INI = baris paling akhir
+            // grup, ATAU baris berikutnya ternyata sudah beda grup/beda halaman --
+            // dalam kasus itu SISA teks CP yang belum sempat digambar (kalau ada,
+            // jaminan tidak hilang) dipaksa masuk ke baris ini apa adanya.
+            const barisBerikutnyaMasihSamaAlir = (i + 1) < bodyCp.length && infoGrup[i + 1].grupIdx === info.grupIdx && halamanBaris[i + 1] === halamanIni
+            const kesempatanTerakhir = info.akhir || !barisBerikutnyaMasihSamaAlir
+            const mulaiDari = alurGambarCp.jumlahDipakai
+            const barisUntukSelIni: string[] = []
+            while (alurGambarCp.jumlahDipakai < semuaBarisCp.length) {
+              const yGaris = alurGambarCp.topY + 3 + alurGambarCp.jumlahDipakai * tinggiPerBarisTeks
+              if (!kesempatanTerakhir && yGaris >= rowBottom - 0.05) break
+              barisUntukSelIni.push(semuaBarisCp[alurGambarCp.jumlahDipakai])
+              alurGambarCp.jumlahDipakai++
+            }
+            if (barisUntukSelIni.length === 0) return
+            doc.setFont('times', 'normal'); doc.setFontSize(10.5); doc.setTextColor(0, 0, 0)
+            const xTeks = data.cell.x + 3
+            // Koreksi posisi baris pertama teks (ascent) SAMA seperti yang dipakai
+            // jspdf-autotable sendiri (autoTableText: y += fontSize * (2 - 1.15)),
+            // supaya konsisten visual dengan kolom lain yang masih dirender bawaan.
+            const fontSizeMm = 10.5 / scaleFactor
+            const yMulai = alurGambarCp.topY + 3 + mulaiDari * tinggiPerBarisTeks + fontSizeMm * (2 - 1.15)
+            doc.text(barisUntukSelIni, xTeks, yMulai)
           },
         })
       } else {

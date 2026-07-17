@@ -85,7 +85,49 @@ export default function DashboardPage() {
         setLogoUtama(parsed.logo_utama || parsed.logo || '')
       }
 
-      const storedTa = localStorage.getItem('master_tahun_ajaran')
+      // PENTING -- perbaikan akar masalah "data hilang di akun/perangkat baru":
+      // lib/cloudSync.ts menarik data dari cloud secara ASINKRON di latar
+      // belakang (lihat CloudSyncProvider, yang bahkan punya batas waktu 4
+      // detik -- kalau koneksi lambat, halaman tetap dibuka walau tarikan data
+      // belum selesai). Di sesi yang benar-benar baru (perangkat baru, akun
+      // baru pertama kali login, atau cache baru saja dibersihkan) ini berarti
+      // localStorage['master_tahun_ajaran'] BISA SAJA masih kosong tepat saat
+      // baris ini dijalankan, PADAHAL datanya sudah ada di cloud (cuma belum
+      // sempat sampai). Kode sebelumnya langsung menyimpulkan "kosong berarti
+      // belum pernah diatur" lalu MEMBUAT tahun ajaran baru dengan ID BARU
+      // (`'ta-' + Date.now()`) dan MENIMPA `master_tahun_ajaran` -- baik di
+      // localStorage maupun di cloud (lewat penyadap localStorage.setItem di
+      // cloudSync.ts). ID baru itu tidak pernah cocok dengan ID lama yang
+      // dipakai untuk mengarsipkan seluruh data (lihat kunciTahun() di
+      // lib/tahunAjaran.ts) -- akibatnya SEMUA data lama (Kaldik, Jadwal,
+      // CP/TP/ATP, Prota/Promes, dst) yang sebenarnya masih ada, jadi terlihat
+      // "hilang" karena kuncinya sudah tidak cocok lagi. Ini jugalah sebabnya
+      // value 'master_tahun_ajaran' di Supabase seperti "berubah sendiri".
+      //
+      // Perbaikannya (memakai pola yang sama seperti sudah diterapkan di
+      // app/jadwal/page.tsx): sebelum memutuskan apa pun, ambil dulu
+      // 'master_tahun_ajaran' LANGSUNG dari Supabase di sini (tidak menunggu/
+      // bergantung pada cloudSync yang mungkin belum selesai) -- baru kalau
+      // ternyata cloud-nya SENDIRI juga betul-betul kosong (instalasi baru
+      // sungguhan), baru buat default baru.
+      let dariCloud: string | null = null
+      try {
+        const { data: rowTa } = await supabase
+          .from('app_storage')
+          .select('value')
+          .eq('key', 'master_tahun_ajaran')
+          .maybeSingle()
+        const nilaiTa = (rowTa?.value as string | undefined) ?? undefined
+        if (nilaiTa) {
+          JSON.parse(nilaiTa) // validasi dulu -- jangan pakai kalau datanya rusak/bukan JSON valid
+          dariCloud = nilaiTa
+          localStorage.setItem('master_tahun_ajaran', nilaiTa)
+        }
+      } catch (e) {
+        console.warn('Gagal memuat master_tahun_ajaran langsung dari cloud, memakai cache localStorage (jika ada):', e)
+      }
+
+      const storedTa = dariCloud || localStorage.getItem('master_tahun_ajaran')
       if (storedTa) {
          setDaftarTa(JSON.parse(storedTa))
       } else {
