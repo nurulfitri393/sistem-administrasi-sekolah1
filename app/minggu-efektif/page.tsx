@@ -729,11 +729,47 @@ export default function MingguEfektifPage() {
         setNamaSekolah(p.nama || '')
       }
 
-      const sg = localStorage.getItem('master_guru'); if (sg) setDaftarGuru(JSON.parse(sg))
+      // PENTING -- perbaikan akar masalah "akun Guru cuma tampil 'Anda', Mapel/Kelas
+      // tidak otomatis terisi, Analisis Alokasi Waktu berhenti di Minggu Efektif saja
+      // (Jumlah Jam & Hari tidak muncul)": getCakupanMengajarGuru() (dipanggil di baris
+      // paling atas komponen ini, SEBELUM effect ini jalan) mencari data guru yang
+      // sedang login di localStorage['master_guru'] SECARA SINKRON. Di sesi yang benar-
+      // benar baru (perangkat baru, akun baru pertama kali login) localStorage itu bisa
+      // saja masih kosong/belum lengkap selagi lib/cloudSync.ts masih menarik datanya di
+      // latar belakang -- akibatnya pencarian guru itu GAGAL, cakupanGuru.guruId jadi
+      // kosong, dan filterGuruId tidak pernah ke-set. Karena Mapel/Kelas otomatis
+      // mengikuti filterGuruId, keduanya ikut kosong, sehingga hitungan Jumlah Jam/Hari
+      // Efektif (yang butuh Guru+Mapel+Kelas terisi) tidak pernah bisa jalan -- persis
+      // seolah "berhenti di Minggu Efektif saja".
+      //
+      // Supaya SELALU memakai data guru yang benar sebelum apa pun lain dibaca, ambil
+      // dulu 'master_guru' LANGSUNG dari Supabase di sini (tidak menunggu/bergantung pada
+      // cloudSync yang mungkin belum selesai), lalu hitung ulang cakupan guru dari data
+      // yang sudah pasti terbaru itu -- bukan dari variabel cakupanGuru di luar (nilainya
+      // sudah telanjur dihitung dari localStorage yang lama, SEBELUM effect ini jalan).
+      let sg = localStorage.getItem('master_guru')
+      try {
+        const { data: rowGuru } = await supabase
+          .from('app_storage')
+          .select('value')
+          .eq('key', 'master_guru')
+          .maybeSingle()
+        const nilaiGuru: string | undefined = (rowGuru?.value as string | undefined) ?? undefined
+        if (nilaiGuru) {
+          JSON.parse(nilaiGuru) // validasi dulu -- jangan timpa kalau ternyata rusak/bukan JSON valid
+          sg = nilaiGuru
+          localStorage.setItem('master_guru', nilaiGuru)
+        }
+      } catch (e) {
+        console.warn('Gagal memuat master_guru langsung dari cloud, memakai cache localStorage (jika ada):', e)
+      }
+      if (sg) setDaftarGuru(JSON.parse(sg))
 
       // Kalau yang login adalah Guru, kunci ke akunnya sendiri -- tidak bisa
-      // melihat/pilih data guru lain sama sekali.
-      if (cakupanGuru?.guruId) setFilterGuruId(cakupanGuru.guruId)
+      // melihat/pilih data guru lain sama sekali. Pakai cakupan yang dihitung ULANG dari
+      // data master_guru yang sudah pasti terbaru (bukan variabel cakupanGuru di luar).
+      const cakupanGuruTerbaru = getCakupanMengajarGuru()
+      if (cakupanGuruTerbaru?.guruId) setFilterGuruId(cakupanGuruTerbaru.guruId)
       const sm = localStorage.getItem('master_mapel'); if (sm) setDaftarMapel(JSON.parse(sm))
       const sr = localStorage.getItem('master_rombel'); if (sr) setDaftarRombel(JSON.parse(sr))
       const st = localStorage.getItem('master_tingkat'); if (st) setDaftarTingkat(JSON.parse(st))
@@ -852,6 +888,16 @@ export default function MingguEfektifPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterGuruId])
+
+  // Kalau yang login adalah Guru dan cuma ampu SATU mapel, langsung pilihkan otomatis --
+  // supaya Analisis Alokasi Waktu (Jumlah Jam & Hari Efektif, yang butuh Guru+Mapel+Kelas
+  // terisi) langsung tampil begitu guru itu login, tanpa harus memilih manual dulu.
+  useEffect(() => {
+    if (cakupanGuru && filterGuruId && !filterMapelId && daftarMapelSesuaiCakupan.length === 1) {
+      setFilterMapelId(daftarMapelSesuaiCakupan[0].id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterGuruId, daftarMapelSesuaiCakupan])
 
   // Auto-pilih unit/kelas pertama begitu datanya tersedia, supaya selector tidak kosong
   useEffect(() => {
