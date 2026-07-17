@@ -113,6 +113,22 @@ const ROMAWI_KE_ANGKA: { [k: string]: number } = {
   I:1, II:2, III:3, IV:4, V:5, VI:6, VII:7, VIII:8, IX:9, X:10, XI:11, XII:12
 }
 
+// Ubah label tingkat kelas INTERNAL (mis. "I", dipakai Admin di Lembaga Pusat sebagai
+// kode ringkas) menjadi label RESMI sesuai yang DIKETIK LANGSUNG oleh Admin di Master
+// Tingkat Kelas (field "Nama Kelas Resmi"), lewat peta `tingkat->namaResmi`. HANYA
+// dipakai saat dokumen sedang dilihat/dicetak atas nama Lembaga Unit (bukan Lembaga
+// Pusat) -- dokumen resmi Unit wajib memakai penomoran kelas nasional, sedangkan
+// Lembaga Pusat tetap memakai penomoran internal untuk keperluan administrasinya
+// sendiri. TIDAK ADA tebakan/konversi otomatis (mis. +6) sama sekali -- kalau Admin
+// tidak mengisi "Nama Kelas Resmi" utk suatu Tingkat, labelnya ditampilkan apa adanya
+// tanpa diubah, supaya penamaan khusus apapun yang dipakai sekolah tidak salah tebak.
+// Catatan penting: fungsi ini HANYA mengubah TEKS TAMPILAN -- kunci pencocokan data
+// (nilai "kelas" asli yang tersimpan di CP/TP/ATP) tidak pernah diubah oleh fungsi ini.
+function labelKelasResmi(tingkat: string, petaKelasResmi: Record<string, string>, tampilkanResmi: boolean): string {
+  if (!tampilkanResmi || !tingkat) return tingkat
+  return petaKelasResmi[tingkat] || tingkat
+}
+
 // Ambil kode TINGKAT (bukan rombel) dari data rombel yang didaftarkan admin.
 // Prioritas: pakai persis apa yang diinput admin di field "tingkat" (tanpa diubah sama sekali),
 // supaya penamaan kelas di CP/TP/ATP selalu sama persis dengan yang didaftarkan admin.
@@ -186,6 +202,7 @@ export default function CpTpAtpPage() {
     ? daftarMapel.filter(m => cakupanGuru.mapelIds.includes(m.id))
     : daftarMapel
   const [daftarRombel, setDaftarRombel] = useState<any[]>([])
+  const [daftarTingkat, setDaftarTingkat] = useState<any[]>([])
 
   // Data CP / Materi / TP / ATP
   const [daftarCp, setDaftarCp] = useState<CP[]>([])
@@ -337,6 +354,7 @@ export default function CpTpAtpPage() {
         setFilterMapelId(cakupan.mapelIds[0])
       }
       const sr = localStorage.getItem('master_rombel'); if (sr) setDaftarRombel(JSON.parse(sr))
+      const st = localStorage.getItem('master_tingkat'); if (st) setDaftarTingkat(JSON.parse(st))
 
       const scp = localStorage.getItem(kunciTahun('data_cp')); if (scp) setDaftarCp(JSON.parse(scp))
       const smt = localStorage.getItem(kunciTahun('data_materi')); if (smt) setDaftarMateri(JSON.parse(smt))
@@ -957,7 +975,7 @@ export default function CpTpAtpPage() {
         const bodyAtp: any[] = []
         atpPerKelas.forEach(blok => {
           if (blok.items.length === 0) return
-          bodyAtp.push([{ content: `KELAS ${blok.kelas}`, colSpan: 2, styles: { fontStyle: 'bold', fillColor: [245, 240, 248] } }])
+          bodyAtp.push([{ content: `KELAS ${labelKelasResmi(blok.kelas, petaKelasResmi, !!filterUnitId)}`, colSpan: 2, styles: { fontStyle: 'bold', fillColor: [245, 240, 248] } }])
           blok.items.forEach(it => {
             // Yang dituliskan di tabel ATP adalah TUJUAN PEMBELAJARAN-nya (deskripsi TP),
             // bukan nama Lingkup Materi -- materiNama cuma dipakai sebagai cadangan kalau
@@ -1086,6 +1104,21 @@ export default function CpTpAtpPage() {
   // ─────────────────────────────────────────────────────────
   // COMPUTED
   // ─────────────────────────────────────────────────────────
+  // Peta label tingkat (mis. "I") -> "Nama Kelas Resmi" yang diketik Admin di Master
+  // Tingkat Kelas (Dashboard) -- dipakai labelKelasResmi() utk tampilan Lembaga Unit.
+  // Kosong utk Tingkat yang tidak diisi Admin (tidak ada dugaan/konversi otomatis).
+  const petaKelasResmi = useMemo(() => {
+    const peta: Record<string, string> = {}
+    daftarRombel.forEach((r: any) => {
+      const t = daftarTingkat.find((tt: any) => tt.id === r.tingkatId)
+      if (t?.namaResmi) {
+        const label = ambilTingkatDariRombel(r)
+        if (label) peta[label] = t.namaResmi
+      }
+    })
+    return peta
+  }, [daftarRombel, daftarTingkat])
+
   // Daftar TINGKAT KELAS yang tersedia, diambil dari rombel yang sudah didaftarkan admin
   // (bukan hardcode I-XII), supaya opsi kelas selalu sesuai kondisi sekolah.
   const kelasTerdaftar = useMemo(() => {
@@ -1680,7 +1713,7 @@ export default function CpTpAtpPage() {
                                       <span className="text-[10px] font-black bg-red-50 text-red-600 border border-red-100 px-2 py-0.5 rounded-lg">⚠️ Materi belum dipilih</span>
                                     )}
                                     {sudahDipetakan ? (
-                                      <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-lg">Kelas {sudahDipetakan.kelas}</span>
+                                      <span className="text-[10px] font-black bg-emerald-50 text-emerald-700 border border-emerald-100 px-2 py-0.5 rounded-lg">Kelas {labelKelasResmi(sudahDipetakan.kelas, petaKelasResmi, !!filterUnitId)}</span>
                                     ) : (
                                       <span className="text-[10px] font-black bg-slate-50 text-slate-500 border border-slate-200 px-2 py-0.5 rounded-lg">Belum dipetakan ke kelas</span>
                                     )}
@@ -1767,7 +1800,7 @@ export default function CpTpAtpPage() {
                             defaultValue=""
                             className="w-full mt-2 px-2 py-1.5 border border-slate-200 rounded-lg text-[10px] font-bold outline-none focus:ring-2 focus:ring-[#8A2FA0] bg-slate-50">
                             <option value="">→ Pindah ke kelas...</option>
-                            {kolomKelasAtp.map(k => <option key={k} value={k}>Kelas {k}</option>)}
+                            {kolomKelasAtp.map(k => <option key={k} value={k}>Kelas {labelKelasResmi(k, petaKelasResmi, !!filterUnitId)}</option>)}
                           </select>
                         )}
                       </div>
@@ -1788,7 +1821,7 @@ export default function CpTpAtpPage() {
                       onDrop={e => onDropColumn(e, kelas)}
                       className={`w-80 shrink-0 border rounded-2xl p-3 flex flex-col max-h-[75vh] transition ${isDragOver ? 'bg-[#F7ECFA] border-[#B36BC7] border-2' : 'bg-white border-slate-200'}`}>
                       <div className="px-1 pb-2 mb-2 border-b border-slate-200 flex items-center justify-between">
-                        <h3 className="text-xs font-black text-slate-800">Kelas {kelas}</h3>
+                        <h3 className="text-xs font-black text-slate-800">Kelas {labelKelasResmi(kelas, petaKelasResmi, !!filterUnitId)}</h3>
                         <div className="flex items-center gap-1.5">
                           {nomorAwal != null && (
                             <span className="text-[9px] font-black bg-teal-50 text-teal-700 px-2 py-0.5 rounded-full">
@@ -1918,7 +1951,7 @@ export default function CpTpAtpPage() {
                                   <td className="p-2 border border-slate-100 text-center font-bold text-[#8A2FA0]">{a.nomorGlobal}</td>
                                   {i === 0 && (
                                     <td className="p-2 border border-slate-100 text-center font-black text-slate-700 align-top" rowSpan={b.items.length}>
-                                      {b.kelas}
+                                      {labelKelasResmi(b.kelas, petaKelasResmi, !!filterUnitId)}
                                     </td>
                                   )}
                                   <td className="p-2 border border-slate-100 text-center text-slate-600">{a.semester === '2' ? 'Genap' : 'Ganjil'}</td>

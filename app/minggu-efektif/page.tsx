@@ -241,9 +241,27 @@ function cariRombelSejadwal(
   return gabungan
 }
 
+// Ganti bagian angka/tingkat di AWAL nama rombel dengan "Nama Kelas Resmi" yang
+// DIKETIK LANGSUNG oleh Admin di Master Tingkat Kelas (Dashboard), mis. Tingkat "1"
+// (internal SMP) diisi Admin "7" -> rombel "1-1" tampil "7-1". HANYA dipakai saat
+// analisis sedang dilihat/dicetak atas nama Lembaga Unit (bukan Lembaga Pusat).
+// TIDAK ADA tebakan/konversi otomatis (mis. +6) -- kalau Admin tidak mengisi "Nama
+// Kelas Resmi" utk Tingkat rombel ybs, nama ditampilkan apa adanya tanpa diubah,
+// supaya penamaan khusus apapun yang dipakai sekolah tidak salah tebak. Bagian nama
+// SETELAH angka/tingkat (mis. "-1" pada "1-1") tidak diubah sama sekali.
+function konversiNamaKelasResmi(rombel: { nama: string; tingkatId?: string } | undefined, daftarTingkat: any[], tampilkanResmi: boolean): string {
+  const nama = rombel?.nama || ''
+  if (!tampilkanResmi || !nama) return nama
+  const tingkat = daftarTingkat.find((tt: any) => tt.id === rombel?.tingkatId)
+  if (!tingkat?.namaResmi) return nama
+  const cocok = String(nama).match(/^(\d{1,2}|XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)(.*)$/i)
+  if (!cocok) return nama
+  return `${tingkat.namaResmi}${cocok[2]}`
+}
+
 // Gabungkan nama-nama rombel jadi satu label: "1A" / "1A dan 1B" / "1A, 1B, dan 1C".
-function labelKelasGabungan(rombelList: any[]): string {
-  const nama = rombelList.map((r: any) => r.nama).filter(Boolean)
+function labelKelasGabungan(rombelList: any[], daftarTingkat: any[], tampilkanResmi = false): string {
+  const nama = rombelList.map((r: any) => konversiNamaKelasResmi(r, daftarTingkat, tampilkanResmi)).filter(Boolean)
   if (nama.length <= 1) return nama[0] || ''
   if (nama.length === 2) return `${nama[0]} dan ${nama[1]}`
   return `${nama.slice(0, -1).join(', ')}, dan ${nama[nama.length - 1]}`
@@ -999,7 +1017,11 @@ export default function MingguEfektifPage() {
     () => cariRombelSejadwal(filterGuruId, filterMapelId, filterRombelId, daftarRombel, daftarJadwal),
     [filterGuruId, filterMapelId, filterRombelId, daftarRombel, daftarJadwal]
   )
-  const namaKelasTampilMapel = labelKelasGabungan(kelasGabunganMapel.length > 0 ? kelasGabunganMapel : (rombelMapelObj ? [rombelMapelObj] : []))
+  // Penomoran kelas RESMI (7,8,9/10,11,12) hanya ditampilkan saat cakupan yang aktif
+  // BUKAN "Lembaga (Pusat)" -- selaras dgn toggle Cakupan Perhitungan Minggu Efektif
+  // Lembaga di atas, yang memang sudah membedakan sudut pandang Pusat vs Unit/Kelas.
+  const tampilkanKelasResmi = scopeLevel !== 'pusat'
+  const namaKelasTampilMapel = labelKelasGabungan(kelasGabunganMapel.length > 0 ? kelasGabunganMapel : (rombelMapelObj ? [rombelMapelObj] : []), daftarTingkat, tampilkanKelasResmi)
 
   // Kalau kelas terpilih digabung dg kelas lain (jadwal identik), sebuah tanggal dianggap
   // tidak efektif untuk GABUNGAN ini kalau event Kaldik-nya berlaku utk SALAH SATU anggota
@@ -1232,16 +1254,16 @@ export default function MingguEfektifPage() {
       namaGuru = daftarGuru.find((g: any) => g.id === filterGuruId)?.nama || ''
       nuptkGuru = daftarGuru.find((g: any) => g.id === filterGuruId)?.nip || ''
       namaMapelPdf = daftarMapel.find((m: any) => m.id === filterMapelId)?.nama || ''
-      namaRombelPdf = namaKelasTampilMapel || daftarRombel.find((r: any) => r.id === filterRombelId)?.nama || ''
+      namaRombelPdf = namaKelasTampilMapel || konversiNamaKelasResmi(daftarRombel.find((r: any) => r.id === filterRombelId), daftarTingkat, tampilkanKelasResmi)
       jpPerMingguPdf = jpPerMingguAktif
       cakupanLabel = `Kelas: ${namaRombelPdf} — Mapel: ${namaMapelPdf}`
     } else {
-      if (scopeLevel === 'kelas' && scopeRombelObj) namaRombelPdf = scopeRombelObj.nama || ''
+      if (scopeLevel === 'kelas' && scopeRombelObj) namaRombelPdf = konversiNamaKelasResmi(scopeRombelObj, daftarTingkat, tampilkanKelasResmi)
       cakupanLabel = scopeLevel === 'pusat'
         ? 'Lembaga (Keseluruhan/Pusat)'
         : scopeLevel === 'unit'
           ? `Unit: ${daftarUnitScope.find(u => u.id === scopeUnitId)?.label || '-'}`
-          : `Kelas: ${scopeRombelObj?.nama || '-'}`
+          : `Kelas: ${konversiNamaKelasResmi(scopeRombelObj, daftarTingkat, tampilkanKelasResmi) || '-'}`
     }
 
     const payload = {
@@ -1474,7 +1496,7 @@ export default function MingguEfektifPage() {
                 <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Pilih Kelas</label>
                 <select value={scopeRombelId} onChange={e => setScopeRombelId(e.target.value)}
                   className="px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D] bg-white min-w-[200px]">
-                  {daftarRombel.map((r: any) => <option key={r.id} value={r.id}>Kelas {r.nama}</option>)}
+                  {daftarRombel.map((r: any) => <option key={r.id} value={r.id}>Kelas {konversiNamaKelasResmi(r, daftarTingkat, tampilkanKelasResmi)}</option>)}
                 </select>
               </div>
             )}
@@ -1586,7 +1608,7 @@ export default function MingguEfektifPage() {
                     <select value={filterRombelId} onChange={e => setFilterRombelId(e.target.value)}
                       className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-[#6A197D] bg-white">
                       <option value="">-- Pilih Kelas --</option>
-                      {daftarRombelSesuaiCakupan.map(r => <option key={r.id} value={r.id}>Kelas {r.nama}</option>)}
+                      {daftarRombelSesuaiCakupan.map(r => <option key={r.id} value={r.id}>Kelas {konversiNamaKelasResmi(r, daftarTingkat, tampilkanKelasResmi)}</option>)}
                     </select>
                   </div>
                 </div>
@@ -1617,7 +1639,7 @@ export default function MingguEfektifPage() {
                   )}
 
                   <KartuPerhitunganMingguJam
-                    title={`Perhitungan Minggu / Jam Efektif — Kelas ${namaKelasTampilMapel || daftarRombel.find(r => r.id === filterRombelId)?.nama || ''}${filterMapelId ? ` (${daftarMapel.find(m => m.id === filterMapelId)?.nama || ''})` : ''}`}
+                    title={`Perhitungan Minggu / Jam Efektif — Kelas ${namaKelasTampilMapel || konversiNamaKelasResmi(daftarRombel.find(r => r.id === filterRombelId), daftarTingkat, tampilkanKelasResmi)}${filterMapelId ? ` (${daftarMapel.find(m => m.id === filterMapelId)?.nama || ''})` : ''}`}
                     subtitle="Disaring dari Kaldik khusus untuk kelas ini — bisa berbeda dari tabel Lembaga di atas"
                     hasil={(filterGuruId && filterMapelId && hasilMapelTerkoreksi) ? hasilMapelTerkoreksi : hasilRombelMapel}
                     jpPerMinggu={jpPerMingguAktif}

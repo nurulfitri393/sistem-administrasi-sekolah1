@@ -37,6 +37,7 @@ export default function DashboardPage() {
   const [daftarTingkat, setDaftarTingkat] = useState<any[]>([])
   const [namaTingkat, setNamaTingkat] = useState('')
   const [lembagaIdTingkat, setLembagaIdTingkat] = useState('')
+  const [namaResmiTingkat, setNamaResmiTingkat] = useState('')
   const [editTingkatId, setEditTingkatId] = useState<string | null>(null)
 
   // Rombel Turunan
@@ -231,13 +232,14 @@ export default function DashboardPage() {
   const handleSimpanTingkat = (e: React.FormEvent) => {
     e.preventDefault()
     if (editTingkatId) {
-      const updated = daftarTingkat.map(item => item.id === editTingkatId ? { ...item, nama: namaTingkat, lembagaId: lembagaIdTingkat } : item)
+      const updated = daftarTingkat.map(item => item.id === editTingkatId ? { ...item, nama: namaTingkat, lembagaId: lembagaIdTingkat, namaResmi: namaResmiTingkat.trim() } : item)
       setDaftarTingkat(updated); localStorage.setItem('master_tingkat', JSON.stringify(updated)); setEditTingkatId(null)
     } else {
-      const updated = [...daftarTingkat, { id: 'lvl-' + Date.now(), nama: namaTingkat, lembagaId: lembagaIdTingkat }]
+      const updated = [...daftarTingkat, { id: 'lvl-' + Date.now(), nama: namaTingkat, lembagaId: lembagaIdTingkat, namaResmi: namaResmiTingkat.trim() }]
       setDaftarTingkat(updated); localStorage.setItem('master_tingkat', JSON.stringify(updated))
     }
     setNamaTingkat('')
+    setNamaResmiTingkat('')
   }
   const handleHapusTingkat = (id: string) => {
     if (confirm('Hapus tingkat ini?')) { const filtered = daftarTingkat.filter(item => item.id !== id); setDaftarTingkat(filtered); localStorage.setItem('master_tingkat', JSON.stringify(filtered)) }
@@ -448,12 +450,16 @@ export default function DashboardPage() {
                   {daftarLembaga.map(u => <option key={u.id} value={u.id}>{u.nama}</option>)}
                 </select>
                 <input type="text" placeholder="Contoh: Kelas 7 atau Fase D" value={namaTingkat} onChange={(e) => setNamaTingkat(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#8A3499]" required={!isGuru} disabled={isGuru} />
+                <div>
+                  <input type="text" placeholder="Nama kelas RESMI (opsional), contoh: 7 atau VII" value={namaResmiTingkat} onChange={(e) => setNamaResmiTingkat(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#8A3499]" disabled={isGuru} />
+                  <p className="text-[10px] text-slate-400 mt-1">Isi HANYA jika nama tingkat di atas adalah kode internal Lembaga Pusat (mis. &quot;1&quot; untuk kelas 7 SMP) yang perlu ditulis beda saat dokumen (CP, TP, ATP, Prota, Promes, Analisis Alokasi Waktu) dicetak atas nama Lembaga Unit. Kosongkan kalau nama tingkat sudah sesuai apa adanya -- sistem TIDAK akan menebak/mengubah otomatis.</p>
+                </div>
                 {!isGuru && (
                   <div className="flex gap-2">
                     <button type="submit" className="flex-1 bg-[#6A197D] text-white py-2.5 rounded-xl font-baloo font-bold shadow-md hover:bg-[#57146A]">
                       {editTingkatId ? 'Update Tingkat' : 'Tambah Tingkat'}
                     </button>
-                    {editTingkatId && <button type="button" onClick={() => { setEditTingkatId(null); setNamaTingkat('') }} className="px-5 py-2.5 bg-slate-100 rounded-xl font-baloo font-bold text-slate-600">Batal</button>}
+                    {editTingkatId && <button type="button" onClick={() => { setEditTingkatId(null); setNamaTingkat(''); setNamaResmiTingkat('') }} className="px-5 py-2.5 bg-slate-100 rounded-xl font-baloo font-bold text-slate-600">Batal</button>}
                   </div>
                 )}
               </form>
@@ -461,12 +467,12 @@ export default function DashboardPage() {
                 {daftarTingkat.map(item => (
                   <div key={item.id} className="bg-white p-3 rounded-xl border border-slate-200 flex justify-between items-center">
                     <div>
-                      <p className="font-baloo font-bold text-sm text-slate-800">{item.nama}</p>
+                      <p className="font-baloo font-bold text-sm text-slate-800">{item.nama}{item.namaResmi ? ` (resmi: ${item.namaResmi})` : ''}</p>
                       <p className="text-[10px] font-baloo font-bold text-[#6A197D] mt-0.5">{daftarLembaga.find(u => u.id === item.lembagaId)?.nama}</p>
                     </div>
                     {!isGuru && (
                       <div className="flex gap-1.5">
-                        <button onClick={() => { setEditTingkatId(item.id); setNamaTingkat(item.nama); setLembagaIdTingkat(item.lembagaId) }} className="p-1.5 text-slate-400 hover:text-[#6A197D] bg-slate-50 rounded-lg"><Edit2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => { setEditTingkatId(item.id); setNamaTingkat(item.nama); setLembagaIdTingkat(item.lembagaId); setNamaResmiTingkat(item.namaResmi || '') }} className="p-1.5 text-slate-400 hover:text-[#6A197D] bg-slate-50 rounded-lg"><Edit2 className="w-3.5 h-3.5" /></button>
                         <button onClick={() => handleHapusTingkat(item.id)} className="p-1.5 text-slate-400 hover:text-red-600 bg-slate-50 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
                       </div>
                     )}

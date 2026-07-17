@@ -46,7 +46,6 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
 import { kunciTahun } from '@/lib/tahunAjaran'
 import { ambilIdentitasOtomatis } from '@/lib/identitasOtomatis'
-import { muatGambarBase64 } from '@/lib/muatGambarBase64'
 import { useAksesGuard } from '@/lib/useAksesGuard'
 import { bisaMengeditModul, getCakupanMengajarGuru } from '@/lib/aksesPeran'
 import {
@@ -155,7 +154,6 @@ interface ProfilSekolah {
   nip: string
   nuptk?: string
   titiMangsa?: string   // "Kota, tanggal" — bisa diisi manual; kalau kosong dihitung otomatis dari kota & tanggal hari ini
-  ttdKepala?: string    // URL gambar tanda tangan Kepala Sekolah/Pimpinan (diunggah lewat Identitas Lembaga)
 }
 
 // ─── Konstanta ────────────────────────────────────────────────────────────────
@@ -265,6 +263,22 @@ function agendaBerlakuUntukKelas(ev: KaldikEvent, unitId: string, rombel?: { id:
  *  himpunan harinya beda walau SEBAGIAN hari kebetulan sama (mis. 2A Senin+Kamis vs
  *  2B Senin+Rabu -- sama-sama Senin tapi pertemuan ke-2 beda hari, jadi TIDAK digabung).
  *  Hasil selalu memuat rombel terpilih sendiri, terurut alfabetis. */
+// Ambil ANGKA/ROMAWI kelas dari nama rombel (mis. "6-1" -> "6", "5-2" -> "5", "VII B" ->
+// "VII") -- dipakai cariRombelSejadwal untuk memastikan penggabungan kelas HANYA terjadi
+// antar kelas dengan TINGKAT/ANGKA KELAS YANG BENAR-BENAR SAMA. Tidak bisa mengandalkan
+// tingkatId semata: granularitas Tingkat diatur bebas oleh Admin (mis. satu Tingkat
+// "Fase C" bisa saja mencakup kelas 5 DAN 6 sekaligus), jadi dua kelas beda angka bisa
+// kebetulan sama tingkatId-nya.
+function angkaKelasDariNamaRombel(nama: string): string {
+  if (!nama) return ''
+  const bersih = String(nama).trim().toUpperCase()
+  const angka = bersih.match(/^(\d{1,2})/)
+  if (angka) return angka[1]
+  const romawi = bersih.match(/^(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)\b/)
+  if (romawi) return romawi[1]
+  return ''
+}
+
 function cariRombelSejadwal(
   guruId: string,
   mapelId: string,
@@ -285,15 +299,42 @@ function cariRombelSejadwal(
   const hariRombelIni = hariSet(rombelId)
   if (hariRombelIni.size === 0) return [rombel]
 
-  const kandidat = rombel.tingkatId ? daftarRombel.filter(r => r.tingkatId === rombel.tingkatId) : [rombel]
+  // Kandidat penggabungan HARUS kelas dengan angka/tingkat yang SAMA PERSIS (mis. "6-1"
+  // dan "6-2" sama-sama "kelas 6" -> boleh digabung; "5-1" dan "6-1" beda angka kelas ->
+  // TIDAK BOLEH digabung meski kebetulan jadwal mengajarnya di hari yang sama). Diprioritaskan
+  // dari angka/romawi di awal NAMA rombel-nya sendiri -- kalau namanya tidak mengikuti pola
+  // yang dikenali (jadi tidak bisa dipastikan sama/beda kelas), turun ke tingkatId sebagai
+  // cadangan supaya perilaku lama tetap jalan untuk data yang penamaannya tidak baku.
+  const kelasRombelIni = angkaKelasDariNamaRombel(rombel.nama)
+  const kandidat = kelasRombelIni
+    ? daftarRombel.filter(r => angkaKelasDariNamaRombel(r.nama) === kelasRombelIni)
+    : (rombel.tingkatId ? daftarRombel.filter(r => r.tingkatId === rombel.tingkatId) : [rombel])
   const gabungan = kandidat.filter(r => r.id === rombelId || hariSama(hariSet(r.id), hariRombelIni))
   gabungan.sort((a, b) => a.nama.localeCompare(b.nama))
   return gabungan
 }
 
+// Ganti bagian angka/tingkat di AWAL nama rombel dengan "Nama Kelas Resmi" yang
+// DIKETIK LANGSUNG oleh Admin di Master Tingkat Kelas (Dashboard), mis. Tingkat "1"
+// (internal SMP) diisi Admin "7" -> rombel "1-1" tampil "7-1". HANYA dipakai saat
+// dokumen sedang dilihat/dicetak atas nama Lembaga Unit (bukan Lembaga Pusat).
+// TIDAK ADA tebakan/konversi otomatis (mis. +6) -- kalau Admin tidak mengisi "Nama
+// Kelas Resmi" utk Tingkat rombel ybs, nama ditampilkan apa adanya tanpa diubah,
+// supaya penamaan khusus apapun yang dipakai sekolah tidak salah tebak. Bagian nama
+// SETELAH angka/tingkat (mis. "-1" pada "1-1") tidak diubah sama sekali.
+function konversiNamaKelasResmi(rombel: { nama: string; tingkatId?: string } | undefined, daftarTingkat: any[], tampilkanResmi: boolean): string {
+  const nama = rombel?.nama || ''
+  if (!tampilkanResmi || !nama) return nama
+  const tingkat = daftarTingkat.find((tt: any) => tt.id === rombel?.tingkatId)
+  if (!tingkat?.namaResmi) return nama
+  const cocok = String(nama).match(/^(\d{1,2}|XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)(.*)$/i)
+  if (!cocok) return nama
+  return `${tingkat.namaResmi}${cocok[2]}`
+}
+
 /** Gabungkan nama-nama rombel jadi satu label: "1A" / "1A dan 1B" / "1A, 1B, dan 1C". */
-function labelKelasGabungan(rombelList: Rombel[]): string {
-  const nama = rombelList.map(r => r.nama).filter(Boolean)
+function labelKelasGabungan(rombelList: Rombel[], daftarTingkat: any[], tampilkanResmi = false): string {
+  const nama = rombelList.map(r => konversiNamaKelasResmi(r, daftarTingkat, tampilkanResmi)).filter(Boolean)
   if (nama.length <= 1) return nama[0] || ''
   if (nama.length === 2) return `${nama[0]} dan ${nama[1]}`
   return `${nama.slice(0, -1).join(', ')}, dan ${nama[nama.length - 1]}`
@@ -686,11 +727,10 @@ async function eksporProtaPDF(params: {
   capJpSem1: number
   capJpSem2: number
   mode?: 'unduh' | 'preview'
-  sematkanTtd?: boolean
 }): Promise<string | void> {
   const { default: jsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
-  const { profil, namaGuru, nuptk, namaMapel, namaKelas, tahunAjaran, rows, capJpSem1, capJpSem2, mode = 'unduh', sematkanTtd = true } = params
+  const { profil, namaGuru, nuptk, namaMapel, namaKelas, tahunAjaran, rows, capJpSem1, capJpSem2, mode = 'unduh' } = params
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
   const pageW = doc.internal.pageSize.width
@@ -850,12 +890,6 @@ async function eksporProtaPDF(params: {
   doc.setFont('times', 'normal'); doc.setFontSize(9); doc.setTextColor(15, 23, 42)
   doc.text('Mengetahui,', ttdKiriTengah, ttdY, { align: 'center' })
   doc.text('Kepala Sekolah / Pimpinan,', ttdKiriTengah, ttdY + 5, { align: 'center' })
-  if (profil.ttdKepala && sematkanTtd) {
-    try {
-      const ttdBase64 = await muatGambarBase64(profil.ttdKepala)
-      if (ttdBase64) doc.addImage(ttdBase64, 'PNG', ttdKiriTengah - 16, ttdY + 8, 32, 28)
-    } catch { /* kalau gagal muat, biarkan kosong (tetap bisa tanda tangan basah manual) */ }
-  }
   doc.setFont('times', 'bold')
   const namaKepalaLines = doc.splitTextToSize(profil.namaKepala || '(Nama Kepala Sekolah)', ttdColW)
   doc.text(namaKepalaLines, ttdKiriTengah, ttdY + 39, { align: 'center' })
@@ -897,14 +931,13 @@ async function eksporPromesPDF(params: {
   alokasiMingguan: Record<string, Record<string, number>>
   capJpEfektif: number
   mode?: 'unduh' | 'preview'
-  sematkanTtd?: boolean
 }): Promise<string | void> {
   const { default: jsPDF } = await import('jspdf')
   const { default: autoTable } = await import('jspdf-autotable')
   const {
     profil, namaGuru, nuptk, namaMapel, namaKelas, tahunAjaran, semester,
     rows, alokasiJpPerMinggu, weeksByBulan, alokasiMingguan, capJpEfektif,
-    mode = 'unduh', sematkanTtd = true,
+    mode = 'unduh',
   } = params
 
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
@@ -1155,12 +1188,6 @@ async function eksporPromesPDF(params: {
   doc.setFont('times', 'normal'); doc.setFontSize(10); doc.setTextColor(15, 23, 42)
   doc.text('Mengetahui,', ttdKiriTengah, afterTableY, { align: 'center' })
   doc.text('Kepala Sekolah / Pimpinan,', ttdKiriTengah, afterTableY + 4, { align: 'center' })
-  if (profil.ttdKepala && sematkanTtd) {
-    try {
-      const ttdBase64 = await muatGambarBase64(profil.ttdKepala)
-      if (ttdBase64) doc.addImage(ttdBase64, 'PNG', ttdKiriTengah - 15, afterTableY + 7, 30, 26)
-    } catch { /* kalau gagal muat, biarkan kosong */ }
-  }
   doc.setFont('times', 'bold'); doc.setFontSize(10)
   const namaKepalaLines = doc.splitTextToSize(profil.namaKepala || '(Nama Kepala Sekolah)', ttdColW)
   doc.text(namaKepalaLines, ttdKiriTengah, afterTableY + 34, { align: 'center' })
@@ -1230,10 +1257,9 @@ export default function ProtaPromesPage() {
   })
 
   const [profil, setProfil] = useState<ProfilSekolah>({
-    namaSekolah: '', alamat: '', kota: '', namaKepala: '', nip: '', nuptk: '', ttdKepala: '',
+    namaSekolah: '', alamat: '', kota: '', namaKepala: '', nip: '', nuptk: '',
   })
   const [editProfil, setEditProfil] = useState(false)
-  const [sematkanTtd, setSematkanTtd] = useState(true)
 
   const [filterGuruId, setFilterGuruId] = useState('')
   const [filterMapelId, setFilterMapelId] = useState('')
@@ -1339,7 +1365,6 @@ export default function ProtaPromesPage() {
       alamat: unitData?.alamat || identitas.alamat || prev.alamat,
       namaKepala: filterUnitId ? (unitData?.namaKepala || '') : (identitas.namaMudir || ''),
       nip: filterUnitId ? (unitData?.nipKepala || '') : (identitas.nipMudir || ''),
-      ttdKepala: filterUnitId ? (unitData?.ttdKepala || '') : (identitas.ttdMudir || ''),
     }))
   }, [filterUnitId])
 
@@ -1394,7 +1419,7 @@ export default function ProtaPromesPage() {
     () => cariRombelSejadwal(filterGuruId, filterMapelId, filterRombelId, daftarRombel, daftarJadwal),
     [filterGuruId, filterMapelId, filterRombelId, daftarRombel, daftarJadwal]
   )
-  const namaKelasTampil = labelKelasGabungan(kelasGabunganTerpilih.length > 0 ? kelasGabunganTerpilih : (rombelTerpilih ? [rombelTerpilih] : []))
+  const namaKelasTampil = labelKelasGabungan(kelasGabunganTerpilih.length > 0 ? kelasGabunganTerpilih : (rombelTerpilih ? [rombelTerpilih] : []), daftarTingkat, !!filterUnitId)
 
   // Kaldik disaring khusus untuk kelas yang sedang dipilih (event yang hanya
   // menyasar kelas/unit lain TIDAK ikut memotong hari efektif kelas ini) --
@@ -1564,14 +1589,14 @@ export default function ProtaPromesPage() {
         namaGuru: guruTerpilih?.nama || '',
         nuptk: guruTerpilih?.nip || '',
         namaMapel: mapelTerpilih?.nama || '',
-        namaKelas: namaKelasTampil || rombelTerpilih?.nama || '',
+        namaKelas: namaKelasTampil || konversiNamaKelasResmi(rombelTerpilih, daftarTingkat, !!filterUnitId),
         tahunAjaran,
         rows: protaRowsFull,
         capJpSem1,
         capJpSem2,
       }
       if (jenis === 'prota-pdf') {
-        const hasilUrl = await eksporProtaPDF({ ...common, mode, sematkanTtd })
+        const hasilUrl = await eksporProtaPDF({ ...common, mode })
         if (mode === 'preview' && hasilUrl) tampilkanPratinjau(hasilUrl as string)
       }
       else if (jenis === 'prota-xlsx') await eksporProtaExcel(common)
@@ -1585,7 +1610,7 @@ export default function ProtaPromesPage() {
           capJpEfektif: d.capJpEfektif,
         }
         if (jenis.endsWith('pdf')) {
-          const hasilUrl = await eksporPromesPDF({ ...paramsPromes, mode, sematkanTtd })
+          const hasilUrl = await eksporPromesPDF({ ...paramsPromes, mode })
           if (mode === 'preview' && hasilUrl) tampilkanPratinjau(hasilUrl as string)
         }
         else await eksporPromesExcel({ ...paramsPromes, weeksFlat: d.weeksFlat })
@@ -1613,7 +1638,7 @@ export default function ProtaPromesPage() {
       <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
         {filterGuruId && filterMapelId && filterRombelId && (
           <p className="text-[10px] text-slate-600 mb-2">
-            <strong>Mata Pelajaran:</strong> {mapelTerpilih?.nama} &nbsp;|&nbsp; <strong>Kelas:</strong> {namaKelasTampil || rombelTerpilih?.nama} &nbsp;|&nbsp; <strong>Semester:</strong> {semester === 'ganjil' ? '1 (Ganjil)' : '2 (Genap)'} &nbsp;|&nbsp; <strong>Tahun Ajaran:</strong> {tahunAjaran} &nbsp;|&nbsp; <strong>Guru:</strong> {guruTerpilih?.nama}
+            <strong>Mata Pelajaran:</strong> {mapelTerpilih?.nama} &nbsp;|&nbsp; <strong>Kelas:</strong> {namaKelasTampil || konversiNamaKelasResmi(rombelTerpilih, daftarTingkat, !!filterUnitId)} &nbsp;|&nbsp; <strong>Semester:</strong> {semester === 'ganjil' ? '1 (Ganjil)' : '2 (Genap)'} &nbsp;|&nbsp; <strong>Tahun Ajaran:</strong> {tahunAjaran} &nbsp;|&nbsp; <strong>Guru:</strong> {guruTerpilih?.nama}
           </p>
         )}
         <table className="text-[9px] border-collapse w-full min-w-[900px]">
@@ -1889,7 +1914,7 @@ export default function ProtaPromesPage() {
                     // saja sebagai jaga-jaga, lebih baik daripada tidak muncul.
                     if (listTersaring.length > 0) list = listTersaring
                   }
-                  return list.map(r => <option key={r.id} value={r.id}>Kelas {r.nama}</option>)
+                  return list.map(r => <option key={r.id} value={r.id}>Kelas {konversiNamaKelasResmi(r, daftarTingkat, !!filterUnitId)}</option>)
                 })()}
               </select>
               {daftarRombel.length === 0 && (
@@ -1919,7 +1944,7 @@ export default function ProtaPromesPage() {
           {filterGuruId && filterMapelId && filterRombelId && protaRows.length === 0 && (
             <div className="bg-[#FFDE59]/25 border border-[#FFDE59] rounded-xl p-4 text-xs text-[#4a1263] flex gap-2 items-start">
               <span className="mt-0.5">⚠</span>
-              <span>Tidak ada TP yang dipetakan untuk <strong>{mapelTerpilih?.nama}</strong> di kelas <strong>{rombelTerpilih?.nama}</strong>.
+              <span>Tidak ada TP yang dipetakan untuk <strong>{mapelTerpilih?.nama}</strong> di kelas <strong>{namaKelasTampil || konversiNamaKelasResmi(rombelTerpilih, daftarTingkat, !!filterUnitId)}</strong>.
                 Pastikan sudah dipetakan di halaman <a href="/atp" className="underline font-bold">CP, TP &amp; ATP</a> (tab ATP).</span>
             </div>
           )}
@@ -2043,11 +2068,7 @@ export default function ProtaPromesPage() {
             <Download className="w-4 h-4 text-[#6A197D]" /> Unduh Dokumen
           </h2>
 
-          <label className="flex items-center gap-2.5 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 cursor-pointer w-fit">
-            <input type="checkbox" checked={sematkanTtd} onChange={e => setSematkanTtd(e.target.checked)} className="w-4 h-4 accent-[#6A197D]" />
-            <span className="text-xs font-bold text-slate-700">Sematkan tanda tangan digital Kepala Sekolah (kalau sudah diunggah di Identitas Lembaga)</span>
-          </label>
-          <p className="text-[10px] text-slate-400 -mt-2">Kalau dimatikan, kolom tanda tangan akan dibiarkan kosong seperti biasa untuk ditandatangani basah secara manual.</p>
+          <p className="text-[10px] text-slate-400">Kolom tanda tangan pada dokumen akan dibiarkan kosong untuk ditandatangani secara basah/manual setelah dicetak.</p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="border border-[#6A197D]/20 rounded-xl p-4 space-y-3 bg-[#6A197D]/12">
@@ -2141,7 +2162,7 @@ export default function ProtaPromesPage() {
               <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
                 {filterGuruId && filterMapelId && filterRombelId && (
                   <p className="text-[10px] text-slate-600 mb-2">
-                    <strong>Mata Pelajaran:</strong> {mapelTerpilih?.nama} &nbsp;|&nbsp; <strong>Kelas:</strong> {namaKelasTampil || rombelTerpilih?.nama} &nbsp;|&nbsp; <strong>Tahun Ajaran:</strong> {tahunAjaran} &nbsp;|&nbsp; <strong>Guru:</strong> {guruTerpilih?.nama}
+                    <strong>Mata Pelajaran:</strong> {mapelTerpilih?.nama} &nbsp;|&nbsp; <strong>Kelas:</strong> {namaKelasTampil || konversiNamaKelasResmi(rombelTerpilih, daftarTingkat, !!filterUnitId)} &nbsp;|&nbsp; <strong>Tahun Ajaran:</strong> {tahunAjaran} &nbsp;|&nbsp; <strong>Guru:</strong> {guruTerpilih?.nama}
                   </p>
                 )}
                 <table className="text-[9px] border-collapse w-full">
