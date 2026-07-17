@@ -628,7 +628,6 @@ async function eksporPromesExcel(params: {
   rowsOut.push(headerRow2)
 
   let no = 1
-  let totalDialokasikan = 0
   rows.forEach(r => {
     const row: (string | number | null)[] = [no++, `${r.elemen} — ${r.materiNama}`, `${r.tpNomor ? r.tpNomor + ' - ' : ''}${r.tpDeskripsi}`, r.jp]
     bulanList.forEach(bln => {
@@ -639,16 +638,18 @@ async function eksporPromesExcel(params: {
         if (!w) { row.push(null); continue }
         const status = klasifikasiMinggu(w)
         const jp = alokasiMingguan[r.id]?.[`${bulanKey}::${m}`] || 0
-        totalDialokasikan += jp
         row.push(status === 'hitam' ? (w.kegiatan || null) : (jp > 0 ? (status === 'abu' ? `${jp} Jp` : jp) : null))
       }
     })
     rowsOut.push(row)
   })
 
-  const jpCadangan = Math.max(0, capJpEfektif - totalDialokasikan)
+  // "Jumlah Jam Total" HARUS sama persis dengan Prota (jumlah kolom "Jml (JP)" di atas,
+  // bukan capJpEfektif/totalDialokasikan) -- lihat catatan di buildDataPromes/totalJpNominal.
+  const totalJpNominal = rows.reduce((a, r) => a + (r.jp || 0), 0)
+  const jpCadangan = Math.max(0, capJpEfektif - totalJpNominal)
   rowsOut.push([])
-  rowsOut.push(['', '', `Jumlah Jam Total Semester ${semLabel}`, capJpEfektif])
+  rowsOut.push(['', '', `Jumlah Jam Total Semester ${semLabel}`, totalJpNominal])
   rowsOut.push(['', '', 'Jumlah Jam Efektif', capJpEfektif])
   rowsOut.push(['', '', 'Jumlah Jam Cadangan', jpCadangan])
   rowsOut.push([])
@@ -968,7 +969,6 @@ async function eksporPromesPDF(params: {
   bulanList.forEach(() => { for (let i = 1; i <= 5; i++) headRow2.push(String(i)) })
   const body: Cell[][] = []
   let no = 1
-  let totalDialokasikan = 0
 
   // Status tiap kolom minggu dihitung SEKALI di sini (bukan di dalam loop baris TP) --
   // statusnya murni dari kalender + jadwal mapel ini, TIDAK bergantung baris TP mana pun,
@@ -1000,7 +1000,6 @@ async function eksporPromesPDF(params: {
         }
         const status = statusKolomMinggu[idxKolomIni]
         const jp = alokasiMingguan[r.id]?.[`${bulanKey}::${m}`] || 0
-        totalDialokasikan += jp
         // Minggu tidak efektif ("abu" ATAU "hitam") selalu pakai warna KEGIATAN ASLI
         // dari Kaldik yang membuat minggu itu tidak efektif -- solid hitam pekat
         // HANYA dipakai kalau memang tidak ada info warna kegiatan sama sekali.
@@ -1026,7 +1025,10 @@ async function eksporPromesPDF(params: {
     body.push(row)
   })
 
-  const jpCadangan = Math.max(0, capJpEfektif - totalDialokasikan)
+  // "Jumlah Jam Total" HARUS sama persis dengan Prota (jumlah kolom "Jml (JP)" di atas,
+  // bukan capJpEfektif/totalDialokasikan) -- lihat catatan di buildDataPromes/totalJpNominal.
+  const totalJpNominal = rows.reduce((a, r) => a + (r.jp || 0), 0)
+  const jpCadangan = Math.max(0, capJpEfektif - totalJpNominal)
   const nWeekCols = bulanList.length * 5
 
   // Ringkasan Jumlah Jam dimasukkan sebagai BARIS TABEL (bukan teks lepas di
@@ -1037,7 +1039,7 @@ async function eksporPromesPDF(params: {
   const selKosongHitam = { content: '', colSpan: nWeekCols, styles: { fillColor: [20, 20, 20] as unknown as string } }
   body.push([
     { content: `Jumlah Jam Total ${semLabel}`, colSpan: 3, styles: { halign: 'right' as unknown as string, fontStyle: 'bold' as unknown as string } },
-    { content: String(totalDialokasikan), styles: { halign: 'center' as unknown as string, fontStyle: 'bold' as unknown as string, textColor: [0, 0, 0] as unknown as string } },
+    { content: String(totalJpNominal), styles: { halign: 'center' as unknown as string, fontStyle: 'bold' as unknown as string, textColor: [0, 0, 0] as unknown as string } },
     selKosongHitam,
   ])
   body.push([
@@ -1525,9 +1527,17 @@ export default function ProtaPromesPage() {
     const rows = protaRowsFull.filter(r => r.semester === semester)
     const { alokasi, totalDialokasikan } = distribusikanJp(weeksFlat, rows.map(r => ({ id: r.id, jp: r.jp })))
     const capJpEfektif = semester === 'ganjil' ? capJpSem1 : capJpSem2
-    const jpCadangan = Math.max(0, capJpEfektif - totalDialokasikan)
+    // "Jumlah Jam Total" Promes HARUS sama persis dengan Prota (jumlah JP yang diisi guru
+    // per TP di form Prota) -- BUKAN totalDialokasikan. totalDialokasikan bisa lebih besar
+    // karena distribusikanJp mengambil JP per HARI MENGAJAR UTUH (blokHarian), jadi baris TP
+    // terakhir yang kebagian satu hari mengajar bisa "dibulatkan ke atas" ke kapasitas hari
+    // itu (mis. minta 1 JP tapi hari itu kapasitasnya 3 JP, seluruh 3 JP tetap tercatat
+    // dipakai hari itu) -- akurat untuk PENJADWALAN per minggu, tapi kalau dipakai sebagai
+    // angka "Jumlah Jam Total" bikin Promes tampak beda dari Prota padahal datanya sama.
+    const totalJpNominal = rows.reduce((a, r) => a + (r.jp || 0), 0)
+    const jpCadangan = Math.max(0, capJpEfektif - totalJpNominal)
 
-    return { semInfo, bulanList, weeksByBulan, weeksFlat, rows, alokasi, totalDialokasikan, capJpEfektif, jpCadangan, getBulanKey }
+    return { semInfo, bulanList, weeksByBulan, weeksFlat, rows, alokasi, totalDialokasikan, totalJpNominal, capJpEfektif, jpCadangan, getBulanKey }
   }
 
   async function handleEkspor(jenis: string, mode: 'unduh' | 'preview' = 'unduh') {
@@ -1583,7 +1593,7 @@ export default function ProtaPromesPage() {
   // ── Render preview Promes (untuk ditampilkan di layar) ──
   const renderPreviewPromes = (semester: 'ganjil' | 'genap') => {
     const d = buildDataPromes(semester)
-    const { bulanList, weeksByBulan, rows, alokasi, getBulanKey, capJpEfektif, jpCadangan } = d
+    const { bulanList, weeksByBulan, rows, alokasi, getBulanKey, capJpEfektif, jpCadangan, totalJpNominal } = d
 
     // Solid hitam sebagai fallback CSS class hanya dipakai kalau minggu tidak efektif
     // itu tidak punya info warna kegiatan Kaldik sama sekali (lihat `gayaWarna` di bawah,
@@ -1657,7 +1667,7 @@ export default function ProtaPromesPage() {
           <tfoot>
             <tr className="bg-[#6A197D]/8 font-black text-[9px]">
               <td colSpan={4} className="border border-slate-200 p-1.5 text-right text-[#5b1774]">Jumlah Jam Total Semester {semester === 'ganjil' ? 'Ganjil' : 'Genap'}</td>
-              <td colSpan={bulanList.length * 5} className="border border-slate-200 p-1.5 text-[#4a1263] text-xs">{capJpEfektif} JP</td>
+              <td colSpan={bulanList.length * 5} className="border border-slate-200 p-1.5 text-[#4a1263] text-xs">{totalJpNominal} JP</td>
             </tr>
             <tr className="bg-slate-50 font-bold text-[9px]">
               <td colSpan={4} className="border border-slate-200 p-1.5 text-right">Jumlah Jam Efektif</td>
