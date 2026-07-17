@@ -781,7 +781,18 @@ export default function CpTpAtpPage() {
             // total grup). Dengan ini tinggi kotak Lingkup Materi & Tujuan
             // Pembelajaran MURNI mengikuti isinya sendiri, tidak pernah ditarik naik
             // oleh Capaian Pembelajaran.
-            const kapasitasBaris = tinggiAlami.map(tinggi => Math.max(1, Math.floor((tinggi - 6) / tinggiPerBarisTeks)))
+            // Padding atas/bawah KHUSUS kolom Capaian Pembelajaran dibuat 0 di batas
+            // antar-baris DALAM grup yang sama (cuma baris paling awal & paling akhir
+            // grup yang tetap pakai padding 3mm) -- lihat penerapannya di didParseCell
+            // TAHAP 1 & 2 di bawah. Tanpa ini, tiap baris tetap punya padding-bawah
+            // sendiri + padding-atas baris berikutnya (jadi total ~6mm kosong) tepat
+            // di titik sambungnya, membuat satu paragraf CP yang menyambung terlihat
+            // seperti terbagi jadi beberapa blok terpisah walau garis sudah disembunyikan.
+            const kapasitasBaris = tinggiAlami.map((tinggi, k) => {
+              const topPad = k === 0 ? 3 : 0
+              const botPad = k === jumlahBaris - 1 ? 3 : 0
+              return Math.max(1, Math.floor((tinggi - topPad - botPad) / tinggiPerBarisTeks))
+            })
 
             let idxCp = 0
             const potonganCp: string[][] = tinggiAlami.map((_, k) => {
@@ -835,6 +846,21 @@ export default function CpTpAtpPage() {
           3: { cellWidth: lebarTp, valign: 'middle' as const },
         }
 
+        // Padding atas/bawah kolom Capaian Pembelajaran (kolom 1 SAJA -- kolom lain
+        // tidak disentuh) dibuat 0 tepat di batas antar-baris DALAM satu grup CP, supaya
+        // paragraf yang menyambung antar-baris tidak kelihatan seperti terbagi jadi
+        // beberapa blok terpisah oleh celah padding. Dipasang lewat didParseCell (bukan
+        // willDrawCell) karena harus berlaku SEBELUM tinggi baris dihitung ulang oleh
+        // jspdf-autotable -- kalau dipasang pas digambar saja, tinggi baris yang sudah
+        // ditetapkan duluan (dari kapasitasBaris di atas) jadi tidak sinkron.
+        const aturPaddingCp = (data: any) => {
+          if (data.section !== 'body' || data.column.index !== 1) return
+          const i = data.row.index
+          if (i < 0) return
+          const info = infoGrup[i]
+          data.cell.styles.cellPadding = { left: 3, right: 3, top: info.awal ? 3 : 0, bottom: info.akhir ? 3 : 0 }
+        }
+
         // ── TAHAP 1: render UJI COBA ke dokumen sementara, cuma untuk tahu baris ke-i
         // benar-benar jatuh di HALAMAN berapa. Tanpa ini, keputusan sembunyikan garis
         // atas/bawah sel gabungan cuma bisa menebak dari data (baris berikutnya kosong
@@ -862,6 +888,7 @@ export default function CpTpAtpPage() {
           styles: stylesAnalisis,
           headStyles: headStylesAnalisis,
           columnStyles: columnStylesAnalisis,
+          didParseCell: aturPaddingCp,
           didDrawCell: (data: any) => {
             if (data.section !== 'body') return
             if (data.row.index >= 0) {
@@ -886,6 +913,7 @@ export default function CpTpAtpPage() {
           styles: stylesAnalisis,
           headStyles: headStylesAnalisis,
           columnStyles: columnStylesAnalisis,
+          didParseCell: aturPaddingCp,
           willDrawCell: (data: any) => {
             // Kolom Elemen (0) & Capaian Pembelajaran (1) sama-sama digabung per grup CP --
             // sekarang teks CP-nya sendiri MENGALIR beda per baris (bukan cuma baris
