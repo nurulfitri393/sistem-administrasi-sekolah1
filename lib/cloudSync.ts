@@ -33,11 +33,16 @@
 // pengguna yang sudah login (Admin atau Guru — keduanya sekarang akun
 // Supabase Auth asli). Lihat supabase/migrations/001_app_storage.sql.
 
-import { supabase } from '@/app/supabase'
+import { supabase, supabaseUrl, supabaseAnonKey } from '@/app/supabase'
+
+// Kunci localStorage tempat mencatat perubahan yang BELUM DIKONFIRMASI berhasil
+// tersinkron ke cloud -- lihat AKAR MASALAH KETIGA di bawah tandaiBelumTerkirim().
+const KUNCI_BELUM_TERKIRIM = '__cloudsync_belum_terkirim__'
 
 function harusDikecualikan(key: string): boolean {
   if (key === 'sesi_guru_login') return true
   if (key.startsWith('sb-')) return true
+  if (key === KUNCI_BELUM_TERKIRIM) return true
   return false
 }
 
@@ -85,23 +90,159 @@ function apakahEchoPerubahanSendiri(key: string, value: string | null): boolean 
   return catatan.value === value
 }
 
+// AKAR MASALAH KETIGA: sebelum ini, "perubahan belum terkirim" cuma dilacak di
+// memori (antrianKirim/nilaiPending) -- begitu perubahan itu SELESAI DICOBA kirim
+// (baik berhasil ATAU GAGAL), catatannya langsung hilang dari memori, dan kalau
+// halaman di-refresh, jejaknya hilang total. Akibatnya: kalau kirimnya gagal (mis.
+// koneksi buruk, request ditolak server) TIDAK ADA CARA untuk tahu nanti bahwa
+// perubahan itu belum benar-benar sampai ke cloud -- localStorage tetap
+// menampilkan datanya (jadi pengguna MERASA sudah tersimpan), tapi begitu
+// halaman di-refresh, tarikDataDariCloud() menarik data LAMA dari cloud (yang
+// memang belum menerima perubahan yang gagal terkirim tadi) dan menimpanya --
+// persis yang dikeluhkan: "sudah dicek datanya ada, tapi begitu refresh hilang".
+//
+// PERBAIKAN: catat setiap perubahan yang AKAN dikirim ke dalam localStorage
+// SENDIRI (bukan cuma di memori) SAAT AKAN dikirim, dan baru hapus catatannya
+// SETELAH benar-benar terkonfirmasi berhasil (bukan cuma "sudah dicoba"). Catatan
+// ini BERTAHAN lintas refresh/tutup tab, sehingga tarikDataDariCloud() bisa
+// mengecek: kalau suatu key masih tercatat "belum terkirim", JANGAN ditimpa
+// dengan data lama dari cloud -- coba kirim ulang saja.
+function bacaDaftarBelumTerkirim(): Record<string, string | null> {
+  try {
+    const raw = window.localStorage.getItem(KUNCI_BELUM_TERKIRIM)
+    return raw ? JSON.parse(raw) : {}
+  } catch {
+    return {}
+  }
+}
+
+function tulisDaftarBelumTerkirim(daftar: Record<string, string | null>) {
+  // Pakai referensi setItem ASLI (kalau sudah terpasang) supaya penulisan catatan
+  // pelacak ini sendiri tidak ikut memicu kirimKeCloud (lagipula sudah disaring
+  // lewat harusDikecualikan, ini cuma jaga-jaga tambahan).
+  const tulis = originalSetItem || window.localStorage.setItem.bind(window.localStorage)
+  tulis(KUNCI_BELUM_TERKIRIM, JSON.stringify(daftar))
+}
+
+function tandaiBelumTerkirim(key: string, value: string | null) {
+  const daftar = bacaDaftarBelumTerkirim()
+  daftar[key] = value
+  tulisDaftarBelumTerkirim(daftar)
+}
+
+function tandaiSudahTerkirim(key: string) {
+  const daftar = bacaDaftarBelumTerkirim()
+  if (Object.prototype.hasOwnProperty.call(daftar, key)) {
+    delete daftar[key]
+    tulisDaftarBelumTerkirim(daftar)
+  }
+}
+
+/**
+ * Berapa banyak perubahan yang masih belum terkonfirmasi tersinkron ke cloud --
+ * dipakai UI (lihat components/CloudSyncProvider.tsx) untuk menampilkan status
+ * JUJUR ke pengguna, supaya tidak salah kira semua sudah aman tersimpan padahal
+ * sebenarnya masih menunggu/gagal terkirim karena koneksi.
+ */
+export function jumlahBelumTersinkron(): number {
+  if (typeof window === 'undefined') return 0
+  return Object.keys(bacaDaftarBelumTerkirim()).length
+}
+
 async function kirimSatuKeCloud(key: string, value: string | null) {
   catatSebagaiPerubahanSendiri(key, value)
   try {
     if (value === null) {
-      await supabase.from('app_storage').delete().eq('key', key)
+      const { error } = await supabase.from('app_storage').delete().eq('key', key)
+      if (error) throw error
     } else {
-      await supabase
+      const { error } = await supabase
         .from('app_storage')
         .upsert({ key, value, updated_at: new Date().toISOString() })
+      if (error) throw error
     }
+    // Baru dianggap benar-benar terkirim SETELAH server mengonfirmasi tanpa error
+    // (sebelumnya: respons error dari Supabase tidak pernah dicek sama sekali --
+    // upsert/delete yang DITOLAK server pun dianggap "berhasil" begitu saja).
+    tandaiSudahTerkirim(key)
   } catch (e) {
     console.warn('[cloudSync] Gagal mengirim perubahan ke cloud untuk key:', key, e)
+    // SENGAJA TIDAK menghapus catatan "belum terkirim" -- biarkan tetap tercatat
+    // supaya dicoba lagi & dilindungi dari tertimpa saat tarikDataDariCloud
+    // berikutnya (lihat komentar di atas bacaDaftarBelumTerkirim).
+  }
+}
+
+// Token sesi TERBARU, disimpan di memori (bukan diambil ulang lewat
+// supabase.auth.getSession() yang async) supaya SIAP DIPAKAI SEKETIKA saat
+// halaman ditinggalkan (lihat flushSatuKeCloudKeepalive) -- pada saat itu
+// tidak ada waktu untuk menunggu proses async tambahan.
+let tokenSesiTerbaru: string | null = null
+function pasangPelacakTokenSesi() {
+  supabase.auth.getSession().then(({ data }) => { tokenSesiTerbaru = data.session?.access_token || null })
+  supabase.auth.onAuthStateChange((_event, session) => { tokenSesiTerbaru = session?.access_token || null })
+}
+
+// AKAR MASALAH kedua (setelah flushSemuaPending ditambahkan): kirimSatuKeCloud
+// (lewat supabase-js, yang di baliknya cuma fetch() BIASA) TIDAK DIJAMIN selesai
+// kalau dipanggil dari event 'pagehide' saat halaman BENAR-BENAR di-refresh/
+// ditutup (beda dgn sekadar pindah tab) -- peramban boleh membatalkan request
+// fetch biasa begitu halaman mulai dibongkar, sebelum request itu sempat sampai
+// ke server. Request YANG DIJAMIN diselesaikan peramban walau halaman sudah
+// dibongkar adalah request dengan flag `keepalive: true` (standar web modern
+// utk kasus persis ini, mis. dipakai analytics). Makanya flush saat halaman
+// ditinggalkan HARUS lewat jalur ini, bukan kirimSatuKeCloud yang biasa dipakai
+// debounce normal (yang punya banyak waktu utk selesai secara wajar).
+// CATATAN: fetch ber-keepalive dibatasi peramban maks ~64KB per body request --
+// utk value yang kebetulan lebih besar dari itu, keepalive akan gagal (baris
+// datanya TETAP coba dikirim lewat kirimSatuKeCloud biasa sbg upaya lain,
+// meski tidak dijamin selesai kalau halamannya keburu tertutup).
+function flushSatuKeCloudKeepalive(key: string, value: string | null) {
+  catatSebagaiPerubahanSendiri(key, value)
+  if (!tokenSesiTerbaru) { kirimSatuKeCloud(key, value); return }
+  const headers: Record<string, string> = {
+    apikey: supabaseAnonKey,
+    Authorization: `Bearer ${tokenSesiTerbaru}`,
+    'Content-Type': 'application/json',
+  }
+  try {
+    if (value === null) {
+      fetch(`${supabaseUrl}/rest/v1/app_storage?key=eq.${encodeURIComponent(key)}`, {
+        method: 'DELETE', headers, keepalive: true,
+      })
+        // Catatan "belum terkirim" HANYA dihapus kalau callback ini sungguh sempat
+        // jalan (mis. halaman cuma disembunyikan/pindah tab, BUKAN benar-benar
+        // dibongkar) -- kalau halamannya benar-benar tertutup/di-refresh, callback
+        // ini tidak akan pernah jalan walau request-nya sendiri tetap terkirim di
+        // latar belakang berkat keepalive; tidak apa, tarikDataDariCloud di sesi
+        // BERIKUTNYA akan mengonfirmasi & membersihkan catatannya sendiri.
+        .then(res => { if (res.ok) tandaiSudahTerkirim(key) })
+        .catch(() => kirimSatuKeCloud(key, value))
+    } else {
+      fetch(`${supabaseUrl}/rest/v1/app_storage`, {
+        method: 'POST',
+        headers: { ...headers, Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({ key, value, updated_at: new Date().toISOString() }),
+        keepalive: true,
+      })
+        .then(res => { if (res.ok) tandaiSudahTerkirim(key) })
+        .catch(() => kirimSatuKeCloud(key, value))
+    }
+  } catch {
+    // keepalive fetch bisa langsung melempar error (mis. body > ~64KB) --
+    // coba jalur biasa sbg upaya terakhir, walau tidak dijamin selesai.
+    kirimSatuKeCloud(key, value)
   }
 }
 
 function kirimKeCloud(key: string, value: string | null) {
   if (harusDikecualikan(key)) return
+
+  // Catat SEKETIKA (sebelum menunggu jeda debounce, apalagi hasil kirimnya) --
+  // supaya kalau halaman tertutup/refresh SEBELUM sempat terkonfirmasi terkirim
+  // (dengan sebab apapun), catatan "belum terkirim" ini tetap ada di localStorage
+  // & bisa dipakai sesi berikutnya utk melindungi & mengirim ulang.
+  tandaiBelumTerkirim(key, value)
 
   const timerLama = antrianKirim.get(key)
   if (timerLama) clearTimeout(timerLama)
@@ -136,7 +277,7 @@ function flushSemuaPending() {
   if (antrianKirim.size === 0) return
   antrianKirim.forEach((timer, key) => {
     clearTimeout(timer)
-    kirimSatuKeCloud(key, nilaiPending.get(key) ?? null)
+    flushSatuKeCloudKeepalive(key, nilaiPending.get(key) ?? null)
     nilaiPending.delete(key)
   })
   antrianKirim.clear()
@@ -172,13 +313,22 @@ export async function tarikDataDariCloud(): Promise<{ ok: boolean; error?: strin
   try {
     const { data, error } = await supabase.from('app_storage').select('key, value')
     if (!error && data) {
+      // Lihat komentar di bacaDaftarBelumTerkirim: key yang masih tercatat "belum
+      // terkirim" TIDAK BOLEH ditimpa dengan nilai dari cloud (yang berarti data
+      // LAMA, dari sebelum perubahan lokal yang belum terkonfirmasi itu).
+      const daftarBelumTerkirim = bacaDaftarBelumTerkirim()
       let adaPerubahan = false
       for (const row of data as { key: string; value: string | null }[]) {
         if (harusDikecualikan(row.key)) continue
+        if (Object.prototype.hasOwnProperty.call(daftarBelumTerkirim, row.key)) continue
         const nilaiBaru = row.value ?? ''
         if (window.localStorage.getItem(row.key) !== nilaiBaru) adaPerubahan = true
         tulisLokalTanpaKirimUlang(row.key, nilaiBaru)
       }
+      // Coba kirim ulang SEMUA perubahan yang masih tercatat belum terkonfirmasi --
+      // baik yang barusan dilindungi dari tertimpa di atas, MAUPUN yang belum
+      // pernah sampai ke cloud sama sekali (makanya tidak muncul di 'data' di atas).
+      Object.entries(daftarBelumTerkirim).forEach(([k, v]) => kirimSatuKeCloud(k, v))
       return { ok: true, adaPerubahan }
     } else if (error) {
       console.warn('[cloudSync] Tabel app_storage belum siap / gagal diakses:', error.message)
@@ -188,6 +338,53 @@ export async function tarikDataDariCloud(): Promise<{ ok: boolean; error?: strin
   } catch (e: any) {
     console.warn('[cloudSync] Gagal menghubungi cloud, memakai data lokal dulu.', e)
     return { ok: false, error: String(e?.message || e) }
+  }
+}
+
+/**
+ * AKAR MASALAH KEEMPAT (kemungkinan penyebab lain data "hilang" saat refresh):
+ * lib/tahunAjaran.ts -> getTahunAjaranAktifId() membaca 'master_tahun_ajaran'
+ * dari localStorage SECARA SINKRON, dan kalau key itu belum ada sama sekali di
+ * localStorage, ia diam-diam jatuh ke fallback id 'default'. Setiap halaman
+ * (CP/TP/ATP, Prota-Promes, Minggu Efektif, RPP, dst) memakai kunciTahun() --
+ * yang menempelkan id tahun ajaran aktif ini ke SETIAP key localStorage yang
+ * dipakainya. Kalau seorang guru mulai mengisi & menyimpan data SEBELUM baris
+ * 'master_tahun_ajaran' sempat termuat dari cloud (mis. tarikDataDariCloud()
+ * yang menarik SELURUH tabel app_storage -- yang bisa besar & lambat -- belum
+ * selesai), data itu tersimpan di bawah key "...__default", BUKAN di bawah
+ * key id tahun ajaran yang sesungguhnya aktif. Begitu 'master_tahun_ajaran'
+ * akhirnya termuat (mis. saat halaman lain dibuka, atau reload berikutnya),
+ * SELURUH halaman beralih memakai key id yang benar -- dan data yang sempat
+ * tersimpan di bawah key "...__default" itu jadi seperti hilang begitu saja,
+ * padahal sebenarnya cuma tersembunyi di key yang salah (persis pola yang
+ * pernah ditangani lib/migrasiTahunAjaran.ts untuk kasus lama yang serupa).
+ *
+ * PERBAIKAN: tarik HANYA baris 'master_tahun_ajaran' ini secara terpisah &
+ * SECEPAT mungkin (satu baris kecil, bukan `select *` ke seluruh tabel yang
+ * bisa jauh lebih besar/lambat), supaya baris penentu-key ini nyaris selalu
+ * sudah termuat ke localStorage jauh sebelum pengguna sempat mengisi & data
+ * apapun tersimpan -- lihat pemanggilannya di components/CloudSyncProvider.tsx
+ * (dijalankan BERSAMAAN, bukan menunggu, initCloudSync() yang menarik seluruh
+ * tabel).
+ */
+export async function pastikanTahunAjaranTerbaru(): Promise<void> {
+  if (typeof window === 'undefined') return
+  try {
+    const { data, error } = await supabase
+      .from('app_storage')
+      .select('value')
+      .eq('key', 'master_tahun_ajaran')
+      .maybeSingle()
+    if (!error && data && typeof data.value === 'string') {
+      // Sama seperti proteksi di tarikDataDariCloud(): jangan timpa kalau ada
+      // perubahan LOKAL untuk key ini yang masih menunggu terkirim ke cloud.
+      const daftarBelumTerkirim = bacaDaftarBelumTerkirim()
+      if (!Object.prototype.hasOwnProperty.call(daftarBelumTerkirim, 'master_tahun_ajaran')) {
+        tulisLokalTanpaKirimUlang('master_tahun_ajaran', data.value)
+      }
+    }
+  } catch (e) {
+    console.warn('[cloudSync] Gagal menarik master_tahun_ajaran secara cepat, lanjut pakai data lokal dulu.', e)
   }
 }
 
@@ -205,6 +402,7 @@ function pasangPenyadapLocalStorage() {
     kirimKeCloud(key, null)
   }
   pasangFlushSaatHalamanDitinggalkan()
+  pasangPelacakTokenSesi()
   sudahDipasang = true
 }
 
@@ -257,8 +455,33 @@ function pasangRealtimeSubscription() {
  */
 export async function initCloudSync(): Promise<{ ok: boolean; error?: string; adaPerubahan?: boolean }> {
   if (typeof window === 'undefined') return { ok: false, error: 'Bukan lingkungan browser.' }
-  const hasil = await tarikDataDariCloud()
+  // AKAR MASALAH yang diperbaiki: penyadap localStorage SEBELUMNYA baru dipasang
+  // SETELAH penarikan data dari cloud selesai (await tarikDataDariCloud() dulu, baru
+  // pasangPenyadapLocalStorage()). Di koneksi lambat, CloudSyncProvider punya batas
+  // waktu 10 detik yang membuka akses ke halaman LEBIH DULU sebelum initCloudSync()
+  // ini benar-benar selesai (supaya pengguna tidak terjebak di layar loading
+  // selamanya) -- tapi itu berarti ada JEDA WAKTU di mana halaman sudah bisa dipakai
+  // (pengguna sudah bisa mengetik & menyimpan), TAPI penyadap localStorage BELUM
+  // terpasang sama sekali. Perubahan yang terjadi di jeda itu TIDAK PERNAH tersadap
+  // -> tidak pernah masuk antrian kirim ke cloud sama sekali (beda dari kasus
+  // flushSemuaPending, yang menangani antrian yang SUDAH tersadap tapi belum
+  // terkirim). Begitu tarikDataDariCloud() akhirnya selesai (membawa data LAMA dari
+  // sebelum perubahan itu), ia menimpa localStorage dan MENGHAPUS perubahan yang
+  // belum sempat tersadap tsb -- bahkan bisa memicu reload otomatis (lihat
+  // CloudSyncProvider). Ini yang menyebabkan pengisian PERTAMA di suatu sesi hilang
+  // (sebelum penyadap terpasang) tapi pengisian BERIKUTNYA tersimpan (setelah
+  // terpasang) -- dan pada akun dengan koneksi yang KONSISTEN lambat, bisa berulang
+  // terus setiap sesi karena jeda 10 detik itu nyaris selalu tercapai.
+  //
+  // PERBAIKAN: pasang penyadap localStorage SEKETIKA (sebelum menunggu penarikan
+  // data dari cloud selesai), bukan sesudahnya -- supaya perubahan APAPUN yang
+  // terjadi sejak halaman dibuka, termasuk saat penarikan masih berjalan di latar
+  // belakang, tetap tersadap dan masuk antrian kirim ke cloud. Aman dilakukan lebih
+  // dulu karena tulisLokalTanpaKirimUlang (dipakai penarikan utk menulis data cloud
+  // ke localStorage) sudah sengaja memakai referensi setItem ASLI (bukan versi yang
+  // disadap), jadi data yang ditarik dari cloud tidak akan salah terkirim balik.
   pasangPenyadapLocalStorage()
+  const hasil = await tarikDataDariCloud()
   pasangRealtimeSubscription()
   return hasil
 }

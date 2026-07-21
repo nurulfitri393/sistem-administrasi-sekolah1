@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { initCloudSync } from '@/lib/cloudSync'
+import { initCloudSync, jumlahBelumTersinkron, pastikanTahunAjaranTerbaru } from '@/lib/cloudSync'
+import { kuncikanTahunAjaranSesiIni } from '@/lib/tahunAjaran'
 
 /**
  * Membungkus seluruh aplikasi. Sebelum halaman apapun dirender, komponen ini
@@ -20,12 +21,26 @@ import { initCloudSync } from '@/lib/cloudSync'
 export default function CloudSyncProvider({ children }: { children: React.ReactNode }) {
   const [siap, setSiap] = useState(false)
   const [errorSinkron, setErrorSinkron] = useState<string | null>(null)
+  // Jumlah perubahan yang masih belum terkonfirmasi tersinkron ke cloud (lihat
+  // lib/cloudSync.ts) -- dicek berkala supaya pengguna dapat status JUJUR, tidak
+  // salah kira semua sudah aman tersimpan padahal masih menunggu/gagal terkirim
+  // karena koneksi. Sebelumnya localStorage langsung menampilkan data yang baru
+  // diisi (jadi TERLIHAT tersimpan), padahal proses kirim ke cloud-nya sendiri
+  // bisa gagal total tanpa pernah diberitahukan ke pengguna sama sekali.
+  const [belumTersinkron, setBelumTersinkron] = useState(0)
 
   useEffect(() => {
     let selesai = false
     let batasWaktuTerlewati = false
-    initCloudSync()
-      .then(hasil => {
+    // pastikanTahunAjaranTerbaru() ditarik BERSAMAAN (bukan menunggu giliran
+    // setelah) initCloudSync() -- lihat komentar lengkapnya di lib/cloudSync.ts.
+    // Baris 'master_tahun_ajaran' menentukan key penyimpanan (kunciTahun()) yang
+    // dipakai hampir semua halaman, jadi baris kecil ini ditarik lewat query
+    // terpisah yang jauh lebih ringan & cepat daripada menunggu penarikan
+    // SELURUH tabel app_storage selesai -- supaya nyaris selalu sudah termuat
+    // sebelum pengguna sempat mengisi & menyimpan data apapun.
+    Promise.all([pastikanTahunAjaranTerbaru(), initCloudSync()])
+      .then(([, hasil]) => {
         if (!hasil.ok) setErrorSinkron(hasil.error || 'Gagal terhubung ke cloud.')
         // Penarikan data dari cloud ternyata baru selesai SETELAH batas waktu di bawah
         // sudah lebih dulu membuka akses ke halaman (koneksi lambat) -- kalau data yang
@@ -41,6 +56,11 @@ export default function CloudSyncProvider({ children }: { children: React.ReactN
       })
       .finally(() => {
         selesai = true
+        // Kunci ID tahun ajaran aktif SEKARANG (lihat lib/tahunAjaran.ts) --
+        // sinkronisasi awal sudah selesai (atau setidaknya sudah dicoba wajar),
+        // jadi nilai yang terbaca saat ini sudah bisa dipercaya untuk dipakai
+        // konsisten sepanjang sisa sesi ini.
+        kuncikanTahunAjaranSesiIni()
         setSiap(true)
       })
     // Jaga-jaga bila koneksi lambat/terputus, jangan biarkan pengguna terjebak di layar
@@ -48,9 +68,20 @@ export default function CloudSyncProvider({ children }: { children: React.ReactN
     // login, localStorage masih kosong sama sekali) punya waktu wajar untuk selesai
     // sebelum halaman "menyerah" dan ditampilkan dengan data yang mungkin belum lengkap.
     const batasWaktu = setTimeout(() => {
-      if (!selesai) { batasWaktuTerlewati = true; setSiap(true) }
+      if (!selesai) { batasWaktuTerlewati = true; kuncikanTahunAjaranSesiIni(); setSiap(true) }
     }, 10000)
     return () => clearTimeout(batasWaktu)
+  }, [])
+
+  // Cek berkala (bukan cuma sekali di awal) -- supaya begitu ada perubahan yang
+  // gagal terkirim SELAMA pengguna aktif memakai halaman (mis. koneksi putus
+  // di tengah jalan), status "belum tersinkron" tetap muncul TANPA pengguna
+  // perlu refresh dulu untuk melihatnya.
+  useEffect(() => {
+    const cek = () => setBelumTersinkron(jumlahBelumTersinkron())
+    cek()
+    const interval = setInterval(cek, 3000)
+    return () => clearInterval(interval)
   }, [])
 
   if (!siap) {
@@ -70,6 +101,11 @@ export default function CloudSyncProvider({ children }: { children: React.ReactN
         <div className="bg-red-600 text-white text-xs font-opensans font-semibold px-4 py-2 text-center">
           ⚠️ Sinkronisasi cloud gagal: {errorSinkron} — data mungkin tidak ter-update lintas perangkat.
           Buka menu &quot;Status Sinkronisasi&quot; untuk detail.
+        </div>
+      )}
+      {belumTersinkron > 0 && (
+        <div className="bg-amber-500 text-white text-xs font-opensans font-semibold px-4 py-2 text-center sticky top-0 z-50">
+          ⏳ {belumTersinkron} perubahan belum tersimpan ke cloud (koneksi lambat/terputus) — jangan tutup atau refresh halaman ini dulu, tunggu sampai pesan ini hilang sendiri.
         </div>
       )}
       {children}

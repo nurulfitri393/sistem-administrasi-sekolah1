@@ -7,7 +7,9 @@ import PratinjauPdfModal from '@/components/PratinjauPdfModal'
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
-import { kunciTahun } from '@/lib/tahunAjaran'
+import { kunciTahun, getTahunAjaranAktifId } from '@/lib/tahunAjaran'
+import { salinKunciPerMapel } from '@/lib/salinTahunAjaran'
+import SalinDariTahunLalu from '@/components/SalinDariTahunLalu'
 import { ambilIdentitasOtomatis } from '@/lib/identitasOtomatis'
 import {
   Landmark, LogOut, Shield, BookOpen, Home, Building,
@@ -215,6 +217,7 @@ export default function CpTpAtpPage() {
 
   // Identitas / cakupan dokumen — CP & TP berlaku per Mapel + Fase (bukan per kelas/semester)
   const [filterMapelId, setFilterMapelId] = useState('')
+  const [daftarTaLain, setDaftarTaLain] = useState<{id:string;nama:string}[]>([])
   const [filterFase, setFilterFase] = useState('')
   const [filterGuruId, setFilterGuruId] = useState('')
   const [filterUnitId, setFilterUnitId] = useState('') // '' = Lembaga Pusat (Mudir)
@@ -228,6 +231,32 @@ export default function CpTpAtpPage() {
     if (!cakupanGuru?.guruId) return []
     return daftarGuru.find(g => g.id === cakupanGuru.guruId)?.unitIds || []
   }, [cakupanGuru, daftarGuru])
+
+  // Daftar TINGKAT KELAS yang tersedia, diambil dari rombel yang sudah didaftarkan admin
+  // (bukan hardcode I-XII), supaya opsi kelas selalu sesuai kondisi sekolah. Dipindah ke
+  // sini (sebelum cascade Guru->Mapel) karena daftarMapelSesuaiGuru di bawah butuh
+  // kelasTerurutAngka utk menentukan Fase suatu rombel lewat hitungKolomKelas().
+  const kelasTerdaftar = useMemo(() => {
+    const set = new Set<string>()
+    daftarRombel.forEach((r: any) => {
+      const t = ambilTingkatDariRombel(r)
+      if (t) set.add(t)
+    })
+    const dikenal = KELAS_OPTIONS_FALLBACK.filter(k => set.has(k))
+    const lainnya = Array.from(set).filter(k => !KELAS_OPTIONS_FALLBACK.includes(k)).sort()
+    const hasil = [...dikenal, ...lainnya]
+    return hasil.length > 0 ? hasil : KELAS_OPTIONS_FALLBACK
+  }, [daftarRombel])
+
+  // Kelas terdaftar, diurutkan dari yang paling rendah — dasar untuk menentukan
+  // kolom kelas per fase (lihat hitungKolomKelas)
+  const kelasTerurutAngka = useMemo(() => {
+    return [...kelasTerdaftar]
+      .map(k => ({ label: k, n: angkaDariKelas(k) }))
+      .filter((x): x is { label: string; n: number } => x.n != null)
+      .sort((a, b) => a.n - b.n)
+      .map(x => x.label)
+  }, [kelasTerdaftar])
 
   // ── Alur seleksi berjenjang: Unit -> Fase -> Guru Pengampu -> Mata Pelajaran ──
   // 1) Fase yang muncul mengikuti jenjang Unit yang dipilih (Lembaga Pusat =
@@ -250,15 +279,40 @@ export default function CpTpAtpPage() {
     return daftarGuru.filter((g: any) => (g.unitIds || []).includes(filterUnitId))
   }, [daftarGuru, filterUnitId])
 
-  // 3) Mata Pelajaran yang muncul mengikuti Guru Pengampu yang dipilih --
-  //    hanya mapel yang benar-benar diampu guru tsb.
+  // 3) Mata Pelajaran yang muncul mengikuti Guru Pengampu YANG DIPILIH DAN Fase yang
+  //    sedang aktif -- hanya mapel yang benar-benar diampu guru tsb DI FASE ITU (dicek
+  //    lewat mapelRombel: rombel yang diajar guru utk mapel tsb harus jatuh ke Fase yang
+  //    sama, lewat hitungKolomKelas). Kalau guru mengajar Informatika & Matematika di
+  //    Fase E tapi hanya Informatika di Fase F, memilih Fase F hanya memunculkan
+  //    Informatika. Data lama yang belum py mapelRombel (kosong) tetap ditampilkan apa
+  //    adanya (tidak disembunyikan) supaya tidak salah menyembunyikan mapel yg valid.
   const daftarMapelSesuaiGuru = useMemo(() => {
     const dasar = daftarMapelTampil
     if (!filterGuruId) return dasar
     const guru = daftarGuru.find((g: any) => g.id === filterGuruId)
     if (!guru) return dasar
-    return dasar.filter(m => (guru.mapelIds || []).includes(m.id))
-  }, [daftarMapelTampil, filterGuruId, daftarGuru])
+    const sesuaiGuru = dasar.filter(m => (guru.mapelIds || []).includes(m.id))
+    let hasil = sesuaiGuru
+    if (filterFase) {
+      const labelKelasFase = new Set(hitungKolomKelas(filterFase, kelasTerurutAngka))
+      hasil = hasil.filter(m => {
+        const rombelIds: string[] = guru.mapelRombel?.[m.id] || []
+        if (rombelIds.length === 0) return true
+        return rombelIds.some(rid => {
+          const rombel = daftarRombel.find((r: any) => r.id === rid)
+          if (!rombel) return false
+          return labelKelasFase.has(ambilTingkatDariRombel(rombel))
+        })
+      })
+      // Kalau penyaringan per-Fase ternyata membuat daftar KOSONG TOTAL padahal guru
+      // sebenarnya punya mapel (mis. hitungKolomKelas salah menebak posisi kelas karena
+      // data Master Rombel belum lengkap/rapi), jangan sampai Mapel jadi tidak bisa
+      // dipilih sama sekali -- lebih baik tampilkan semua mapel guru apa adanya
+      // daripada salah menyembunyikan mapel yang sebenarnya valid.
+      if (hasil.length === 0 && sesuaiGuru.length > 0) hasil = sesuaiGuru
+    }
+    return hasil
+  }, [daftarMapelTampil, filterGuruId, daftarGuru, filterFase, kelasTerurutAngka, daftarRombel])
 
   // Reset berjenjang: kalau pilihan level atas berubah dan pilihan level bawah
   // jadi tidak valid lagi, kosongkan supaya tidak salah data.
@@ -271,7 +325,18 @@ export default function CpTpAtpPage() {
   useEffect(() => {
     if (filterMapelId && !daftarMapelSesuaiGuru.some(m => m.id === filterMapelId)) setFilterMapelId('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterGuruId])
+  }, [filterGuruId, filterFase, daftarMapelSesuaiGuru])
+
+  // Kalau Mapel yang tersedia (utk Guru+Fase yang aktif) tinggal SATU pilihan, langsung
+  // pilihkan otomatis -- selaras dengan field Guru Pengampu yang juga otomatis terisi utk
+  // akun Guru, supaya dropdown Mapel yang di-disable (lihat "disabled" di JSX-nya) tidak
+  // pernah terlihat kosong ("-- Pilih Mapel --") padahal sebenarnya cuma ada 1 pilihan.
+  useEffect(() => {
+    if (filterGuruId && !filterMapelId && daftarMapelSesuaiGuru.length === 1) {
+      setFilterMapelId(daftarMapelSesuaiGuru[0].id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterGuruId, filterFase, daftarMapelSesuaiGuru])
 
   const defaultTahunAjaran = (() => {
     const now = new Date()
@@ -356,6 +421,14 @@ export default function CpTpAtpPage() {
       const sr = localStorage.getItem('master_rombel'); if (sr) setDaftarRombel(JSON.parse(sr))
       const st = localStorage.getItem('master_tingkat'); if (st) setDaftarTingkat(JSON.parse(st))
 
+      try {
+        const rawTa = localStorage.getItem('master_tahun_ajaran')
+        if (rawTa) {
+          const daftar = JSON.parse(rawTa)
+          setDaftarTaLain(daftar.filter((t: any) => !t.aktif).map((t: any) => ({ id: t.id, nama: t.nama })))
+        }
+      } catch { /* abaikan */ }
+
       const scp = localStorage.getItem(kunciTahun('data_cp')); if (scp) setDaftarCp(JSON.parse(scp))
       const smt = localStorage.getItem(kunciTahun('data_materi')); if (smt) setDaftarMateri(JSON.parse(smt))
       const stp = localStorage.getItem(kunciTahun('data_tp')); if (stp) setDaftarTp(JSON.parse(stp))
@@ -372,7 +445,71 @@ export default function CpTpAtpPage() {
   // "hilang" lagi setelah reload, karena tersimpan di kunci yang berbeda dari
   // yang dibaca. Diperbaiki di sini secara terpusat.
   const KUNCI_TAHUN_CPTPATP = new Set(['data_cp', 'data_materi', 'data_tp', 'data_atp'])
-  const save = (key: string, data: any) => localStorage.setItem(KUNCI_TAHUN_CPTPATP.has(key) ? kunciTahun(key) : key, JSON.stringify(data))
+
+  // AKAR MASALAH "data guru lain hilang saat banyak guru mengisi bersamaan":
+  // data_cp/data_tp/data_atp/data_materi adalah SATU larik yang dipakai BERSAMA
+  // oleh SEMUA guru (tiap entri dibedakan lewat field mapelId, bukan lewat kunci
+  // localStorage terpisah). Sebelumnya save() menulis array HASIL TRANSFORM dari
+  // state React di memori (daftarCp dkk) APA ADANYA -- kalau state di memori itu
+  // sudah KETINGGALAN (mis. Guru B baru saja menambah CP mapelnya sendiri
+  // sepersekian detik lalu, tapi browser Guru A belum sempat menerima update itu
+  // lewat Realtime), menyimpan versi ketinggalan itu akan MENIMPA BALIK &
+  // MENGHAPUS perubahan Guru B yang baru saja tersimpan ("lost update") -- walau
+  // keduanya mengisi mapel yang sama sekali berbeda.
+  //
+  // PERBAIKAN: save() sekarang menerima juga versi array SEBELUM aksi ini
+  // (before), lalu menghitung SELISIHnya terhadap versi SESUDAH (updated) --
+  // item mana saja yang ditambah/diubah/dihapus oleh AKSI INI SAJA. Selisih itu
+  // baru diterapkan ke atas versi TERBARU yang ada di localStorage SAAT AKAN
+  // MENULIS (yang, berkat langganan Supabase Realtime, semestinya sudah
+  // mencakup perubahan guru lain yang baru saja tersimpan) -- bukan menimpanya
+  // begitu saja dengan versi lama di memori. Entri milik guru lain yang tidak
+  // disentuh aksi ini sama sekali selalu dipertahankan apa adanya. Urutan
+  // tampilan TIDAK bergantung pada urutan larik ini (lihat urutanDiKelas utk
+  // ATP, dan pengelompokan per mapelId/fase di tempat lain) jadi aman disusun
+  // ulang oleh proses gabung ini.
+  function simpanArrayBersama<T extends { id: string }>(kunciDasar: string, before: T[], updated: T[]): T[] {
+    const kunciAsli = KUNCI_TAHUN_CPTPATP.has(kunciDasar) ? kunciTahun(kunciDasar) : kunciDasar
+    let dariCloud: T[] | null = null
+    try {
+      const raw = localStorage.getItem(kunciAsli)
+      if (raw) { const p = JSON.parse(raw); if (Array.isArray(p)) dariCloud = p }
+    } catch { dariCloud = null }
+
+    if (dariCloud === null) {
+      if (updated.length > 0) localStorage.setItem(kunciAsli, JSON.stringify(updated))
+      else localStorage.removeItem(kunciAsli)
+      return updated
+    }
+
+    const petaBefore = new Map(before.map(i => [i.id, i]))
+    const petaUpdated = new Map(updated.map(i => [i.id, i]))
+
+    const idDihapus = new Set([...petaBefore.keys()].filter(id => !petaUpdated.has(id)))
+    const idDiubahAtauBaru = [...petaUpdated.entries()]
+      .filter(([id, item]) => {
+        const lama = petaBefore.get(id)
+        return !lama || JSON.stringify(lama) !== JSON.stringify(item)
+      })
+      .map(([id]) => id)
+
+    const petaHasil = new Map(dariCloud.map(i => [i.id, i]))
+    idDihapus.forEach(id => petaHasil.delete(id))
+    idDiubahAtauBaru.forEach(id => petaHasil.set(id, petaUpdated.get(id) as T))
+
+    const urutanId = dariCloud.filter(i => petaHasil.has(i.id)).map(i => i.id)
+    const idSudahDiurutkan = new Set(urutanId)
+    updated.forEach(item => {
+      if (petaHasil.has(item.id) && !idSudahDiurutkan.has(item.id)) { urutanId.push(item.id); idSudahDiurutkan.add(item.id) }
+    })
+
+    const hasil = urutanId.map(id => petaHasil.get(id) as T)
+    if (hasil.length > 0) localStorage.setItem(kunciAsli, JSON.stringify(hasil))
+    else localStorage.removeItem(kunciAsli)
+    return hasil
+  }
+
+  const save = <T extends { id: string }>(key: string, before: T[], updated: T[]): T[] => simpanArrayBersama(key, before, updated)
 
   // ─────────────────────────────────────────────────────────
   // CP CRUD (per elemen — berlaku untuk satu fase, bukan satu kelas)
@@ -383,11 +520,11 @@ export default function CpTpAtpPage() {
     }
     if (editCpId) {
       const updated = daftarCp.map(c => c.id === editCpId ? { ...c, ...formCp } as CP : c)
-      setDaftarCp(updated); save('data_cp', updated)
+      setDaftarCp(save('data_cp', daftarCp, updated))
     } else {
       const newCp: CP = { id: 'cp-'+Date.now(), createdAt: new Date().toISOString(), ...formCp as any }
       const updated = [...daftarCp, newCp]
-      setDaftarCp(updated); save('data_cp', updated)
+      setDaftarCp(save('data_cp', daftarCp, updated))
     }
     setFormCp({}); setEditCpId(null); setShowFormCp(false)
   }
@@ -399,10 +536,10 @@ export default function CpTpAtpPage() {
     const updMateri = daftarMateri.filter(m => m.cpId !== id)
     const updTp = daftarTp.filter(t => t.cpId !== id)
     const updAtp = daftarAtp.filter(a => !tpIds.includes(a.tpId))
-    setDaftarCp(updCp); save('data_cp', updCp)
-    setDaftarMateri(updMateri); save('data_materi', updMateri)
-    setDaftarTp(updTp); save('data_tp', updTp)
-    setDaftarAtp(updAtp); save('data_atp', updAtp)
+    setDaftarCp(save('data_cp', daftarCp, updCp))
+    setDaftarMateri(save('data_materi', daftarMateri, updMateri))
+    setDaftarTp(save('data_tp', daftarTp, updTp))
+    setDaftarAtp(save('data_atp', daftarAtp, updAtp))
   }
 
   // ─────────────────────────────────────────────────────────
@@ -413,7 +550,7 @@ export default function CpTpAtpPage() {
     const cp = daftarCp.find(c => c.id === formMateri.cpId)
     if (editMateriId) {
       const updated = daftarMateri.map(m => m.id === editMateriId ? { ...m, ...formMateri } as Materi : m)
-      setDaftarMateri(updated); save('data_materi', updated)
+      setDaftarMateri(save('data_materi', daftarMateri, updated))
     } else {
       const newMateri: Materi = {
         id: 'mat-'+Date.now(),
@@ -424,7 +561,7 @@ export default function CpTpAtpPage() {
         ...formMateri as any
       }
       const updated = [...daftarMateri, newMateri]
-      setDaftarMateri(updated); save('data_materi', updated)
+      setDaftarMateri(save('data_materi', daftarMateri, updated))
     }
     setFormMateri({}); setEditMateriId(null); setShowFormMateri(false)
   }
@@ -436,10 +573,10 @@ export default function CpTpAtpPage() {
       : 'Hapus materi ini?'
     if (!confirm(pesan)) return
     const updated = daftarMateri.filter(m => m.id !== id)
-    setDaftarMateri(updated); save('data_materi', updated)
+    setDaftarMateri(save('data_materi', daftarMateri, updated))
     if (tpTerkait.length > 0) {
       const updTp = daftarTp.map(t => t.materiId === id ? { ...t, materiId: '' } : t)
-      setDaftarTp(updTp); save('data_tp', updTp)
+      setDaftarTp(save('data_tp', daftarTp, updTp))
     }
   }
 
@@ -453,7 +590,7 @@ export default function CpTpAtpPage() {
     const cp = daftarCp.find(c => c.id === formTp.cpId)
     if (editTpId) {
       const updated = daftarTp.map(t => t.id === editTpId ? { ...t, ...formTp } as TP : t)
-      setDaftarTp(updated); save('data_tp', updated)
+      setDaftarTp(save('data_tp', daftarTp, updated))
     } else {
       // Nomor otomatis
       const tpDiCp = daftarTp.filter(t => t.cpId === formTp.cpId)
@@ -468,7 +605,7 @@ export default function CpTpAtpPage() {
         ...formTp as any
       }
       const updated = [...daftarTp, newTp]
-      setDaftarTp(updated); save('data_tp', updated)
+      setDaftarTp(save('data_tp', daftarTp, updated))
     }
     setFormTp({ dimensiPancasila: [] }); setEditTpId(null); setShowFormTp(false)
   }
@@ -477,8 +614,8 @@ export default function CpTpAtpPage() {
     if (!confirm('Hapus TP ini? Pemetaannya ke kelas (ATP) juga ikut terhapus.')) return
     const updTp = daftarTp.filter(t => t.id !== id)
     const updAtp = daftarAtp.filter(a => a.tpId !== id)
-    setDaftarTp(updTp); save('data_tp', updTp)
-    setDaftarAtp(updAtp); save('data_atp', updAtp)
+    setDaftarTp(save('data_tp', daftarTp, updTp))
+    setDaftarAtp(save('data_atp', daftarAtp, updAtp))
   }
 
   const toggleDimensi = (d: string) => {
@@ -514,7 +651,7 @@ export default function CpTpAtpPage() {
       createdAt: new Date().toISOString()
     }
     const updated = [...daftarAtp, newEntry]
-    setDaftarAtp(updated); save('data_atp', updated)
+    setDaftarAtp(save('data_atp', daftarAtp, updated))
   }
 
   // Pindahkan entri yang sudah ada ke kelas lain (drag antar kolom)
@@ -528,7 +665,7 @@ export default function CpTpAtpPage() {
     const sisanya = daftarAtp.filter(a =>
       !(a.mapelId === entry.mapelId && a.fase === entry.fase && (a.kelas === entry.kelas || a.kelas === kelasBaru)) )
     const updated = [...sisanya, ...kelompokLama, ...kelompokTujuan, entryPindah]
-    setDaftarAtp(updated); save('data_atp', updated)
+    setDaftarAtp(save('data_atp', daftarAtp, updated))
   }
 
   // Urutkan bebas di dalam satu kolom kelas
@@ -547,7 +684,7 @@ export default function CpTpAtpPage() {
     const direindeks = baru.map((item, i) => ({ ...item, urutanDiKelas: i + 1 }))
     const rest = daftarAtp.filter(a => !(a.mapelId === entry.mapelId && a.fase === entry.fase && a.kelas === entry.kelas))
     const updated = [...rest, ...direindeks]
-    setDaftarAtp(updated); save('data_atp', updated)
+    setDaftarAtp(save('data_atp', daftarAtp, updated))
   }
 
   // Kembalikan TP ke pool (hapus pemetaan kelasnya)
@@ -557,13 +694,13 @@ export default function CpTpAtpPage() {
     const sisaKelompok = rekalkulasiKelas(daftarAtp.filter(a => a.mapelId === entry.mapelId && a.fase === entry.fase && a.kelas === entry.kelas && a.id !== entryId))
     const rest = daftarAtp.filter(a => !(a.mapelId === entry.mapelId && a.fase === entry.fase && a.kelas === entry.kelas))
     const updated = [...rest, ...sisaKelompok]
-    setDaftarAtp(updated); save('data_atp', updated)
+    setDaftarAtp(save('data_atp', daftarAtp, updated))
   }
 
   // Ubah semester TP ini (dipakai untuk input otomatis ke Prota & Promes)
   const handleUbahSemester = (entryId: string, semester: '1'|'2') => {
     const updated = daftarAtp.map(a => a.id === entryId ? { ...a, semester } : a)
-    setDaftarAtp(updated); save('data_atp', updated)
+    setDaftarAtp(save('data_atp', daftarAtp, updated))
   }
 
   // ── Drag & drop handlers
@@ -1119,30 +1256,6 @@ export default function CpTpAtpPage() {
     return peta
   }, [daftarRombel, daftarTingkat])
 
-  // Daftar TINGKAT KELAS yang tersedia, diambil dari rombel yang sudah didaftarkan admin
-  // (bukan hardcode I-XII), supaya opsi kelas selalu sesuai kondisi sekolah.
-  const kelasTerdaftar = useMemo(() => {
-    const set = new Set<string>()
-    daftarRombel.forEach((r: any) => {
-      const t = ambilTingkatDariRombel(r)
-      if (t) set.add(t)
-    })
-    const dikenal = KELAS_OPTIONS_FALLBACK.filter(k => set.has(k))
-    const lainnya = Array.from(set).filter(k => !KELAS_OPTIONS_FALLBACK.includes(k)).sort()
-    const hasil = [...dikenal, ...lainnya]
-    return hasil.length > 0 ? hasil : KELAS_OPTIONS_FALLBACK
-  }, [daftarRombel])
-
-  // Kelas terdaftar, diurutkan dari yang paling rendah — dasar untuk menentukan
-  // kolom kelas per fase (lihat hitungKolomKelas)
-  const kelasTerurutAngka = useMemo(() => {
-    return [...kelasTerdaftar]
-      .map(k => ({ label: k, n: angkaDariKelas(k) }))
-      .filter((x): x is { label: string; n: number } => x.n != null)
-      .sort((a, b) => a.n - b.n)
-      .map(x => x.label)
-  }, [kelasTerdaftar])
-
   // Kolom kelas yang relevan untuk papan ATP, berdasarkan jenjang fase terpilih
   const kolomKelasAtp = useMemo(() => {
     if (!filterFase) return []
@@ -1297,6 +1410,21 @@ export default function CpTpAtpPage() {
               </p>
             </div>
           </div>
+
+          {bolehEdit && filterMapelId && (
+            <div className="mt-4">
+              <SalinDariTahunLalu
+                daftarSumber={daftarTaLain}
+                label={`Sudah punya CP/TP/ATP mapel ini di tahun lalu? Salin sebagai referensi:`}
+                onSalin={(idSumber) => salinKunciPerMapel(
+                  ['data_cp', 'data_materi', 'data_tp', 'data_atp'],
+                  idSumber,
+                  getTahunAjaranAktifId(),
+                  [filterMapelId]
+                )}
+              />
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end mt-4 pt-4 border-t border-slate-100">
             <div>

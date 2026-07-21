@@ -893,19 +893,30 @@ export default function MingguEfektifPage() {
 
   // Rombel/Kelas yang muncul di tab "Per Mapel/Guru" HARUS mengikuti Unit yang
   // sedang dipilih di cakupan atas -- supaya tidak salah pilih kelas dari unit lain.
-  // Kalau yang login adalah Guru, dibatasi lagi hanya kelas yang benar-benar
-  // diampu guru tsb (union rombel dari seluruh mapelRombel miliknya).
+  // Kalau yang login adalah Guru, dibatasi lagi hanya kelas yang benar-benar diampu
+  // guru tsb -- DAN kalau Mapel sudah dipilih, HARUS kelas yang diajar guru UNTUK
+  // MAPEL ITU secara spesifik (lewat mapelRombel[mapelId]), bukan union semua kelas
+  // dari seluruh mapel lagi. Mis. guru mengajar Informatika & Matematika di kelas
+  // 5-1 tapi hanya Informatika di kelas 6-1 -- Mapel yang muncul menyesuaikan Kelas
+  // yang dipilih (lihat daftarMapelSesuaiCakupan di bawah).
   const daftarRombelSesuaiCakupan = useMemo(() => {
     let list = daftarRombel
     if (unitAcuanCakupan) list = list.filter((r: any) => resolveUnitIdRombel(r) === unitAcuanCakupan)
     if (cakupanGuru) {
       const rombelIdGuru = new Set<string>()
       Object.values(cakupanGuru.mapelRombel || {}).forEach((ids: any) => (ids || []).forEach((id: string) => rombelIdGuru.add(id)))
-      list = list.filter((r: any) => rombelIdGuru.has(r.id))
+      if (filterMapelId) {
+        const rombelIdMapelIni = new Set(cakupanGuru.mapelRombel?.[filterMapelId] || [])
+        list = rombelIdMapelIni.size > 0
+          ? list.filter((r: any) => rombelIdMapelIni.has(r.id))
+          : (rombelIdGuru.size > 0 ? list.filter((r: any) => rombelIdGuru.has(r.id)) : list)
+      } else {
+        list = list.filter((r: any) => rombelIdGuru.has(r.id))
+      }
     }
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [daftarRombel, daftarTingkat, unitAcuanCakupan, cakupanGuru])
+  }, [daftarRombel, daftarTingkat, unitAcuanCakupan, cakupanGuru, filterMapelId])
 
   // Guru yang muncul juga HARUS mengikuti Unit yang sedang dipilih (guru yang
   // memang ditugaskan di unit tsb, lihat unitIds di Kelola Data Guru).
@@ -916,14 +927,23 @@ export default function MingguEfektifPage() {
 
   // Mapel yang muncul di tab "Per Mapel/Guru" HARUS mengikuti Guru yang
   // dipilih di dropdown -- baik itu karena login sebagai akun Guru (terkunci
-  // otomatis) MAUPUN karena Admin memilih guru tertentu secara manual.
-  // Kalau belum ada guru dipilih sama sekali, tampilkan semua mapel.
+  // otomatis) MAUPUN karena Admin memilih guru tertentu secara manual. Kalau
+  // Kelas sudah dipilih, HARUS mapel yang benar-benar diajar guru DI KELAS ITU
+  // (lewat mapelRombel), bukan seluruh mapel yang diampu guru secara umum.
   const daftarMapelSesuaiCakupan = useMemo(() => {
     if (!filterGuruId) return daftarMapel
     const guru = daftarGuru.find((g: any) => g.id === filterGuruId)
     if (!guru?.mapelIds?.length) return daftarMapel
-    return daftarMapel.filter((m: any) => guru.mapelIds.includes(m.id))
-  }, [daftarMapel, daftarGuru, filterGuruId])
+    let hasil = daftarMapel.filter((m: any) => guru.mapelIds.includes(m.id))
+    if (filterRombelId) {
+      const listTersaring = hasil.filter((m: any) => (guru.mapelRombel?.[m.id] || []).includes(filterRombelId))
+      // Kalau ternyata kosong (mis. data mapelRombel utk kombinasi ini belum
+      // lengkap), jangan sampai dropdown Mapel jadi kosong total -- pakai daftar
+      // semula (seluruh mapel guru) sbg jaga-jaga.
+      if (listTersaring.length > 0) hasil = listTersaring
+    }
+    return hasil
+  }, [daftarMapel, daftarGuru, filterGuruId, filterRombelId])
 
   // Kalau Unit cakupan diganti dan Guru/Kelas yang tadinya dipilih ternyata
   // bukan milik unit yang baru, kosongkan lagi supaya tidak salah data.
@@ -937,14 +957,24 @@ export default function MingguEfektifPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unitAcuanCakupan])
 
-  // Kalau Guru diganti dan Mapel yang tadinya dipilih ternyata bukan mapel
-  // yang diampu guru baru itu, kosongkan lagi supaya tidak salah data.
+  // Kalau Guru diganti (atau Kelas berganti sehingga Mapel jadi tidak valid lagi utk
+  // kelas itu) dan Mapel yang tadinya dipilih ternyata bukan mapel yang diampu guru
+  // itu (di kelas itu), kosongkan lagi supaya tidak salah data.
   useEffect(() => {
     if (filterMapelId && !daftarMapelSesuaiCakupan.some((m: any) => m.id === filterMapelId)) {
       setFilterMapelId('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterGuruId])
+  }, [filterGuruId, filterRombelId, daftarMapelSesuaiCakupan])
+
+  // Kalau Mapel diganti sehingga Kelas yang tadinya dipilih ternyata bukan kelas yang
+  // diajar guru utk mapel baru itu, kosongkan lagi supaya tidak salah data.
+  useEffect(() => {
+    if (filterRombelId && !daftarRombelSesuaiCakupan.some((r: any) => r.id === filterRombelId)) {
+      setFilterRombelId('')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterMapelId, daftarRombelSesuaiCakupan])
 
   // Kalau yang login adalah Guru dan cuma ampu SATU mapel, langsung pilihkan otomatis --
   // supaya Analisis Alokasi Waktu (Jumlah Jam & Hari Efektif, yang butuh Guru+Mapel+Kelas

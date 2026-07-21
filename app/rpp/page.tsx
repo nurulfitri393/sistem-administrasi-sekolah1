@@ -39,6 +39,24 @@ const KELAS_ROMAWI_PER_FASE: Record<string, string[]> = {
   A: ['I', 'II'], B: ['III', 'IV'], C: ['V', 'VI'],
   D: ['VII', 'VIII', 'IX'], E: ['X'], F: ['XI', 'XII'],
 }
+const ANGKA_KE_ROMAWI_RPPM: Record<string, string> = {
+  '1':'I','2':'II','3':'III','4':'IV','5':'V','6':'VI','7':'VII','8':'VIII','9':'IX','10':'X','11':'XI','12':'XII'
+}
+// Ambil kode TINGKAT (angka romawi) dari data rombel -- sama persis dengan logika
+// ambilTingkatDariRombel di halaman CP, TP & ATP, dipakai di sini utk mencocokkan
+// rombel yang diajar guru (lewat mapelRombel) dengan Fase yang sedang dipilih.
+function tingkatRomawiDariRombelRppm(r: any): string {
+  if (!r) return ''
+  if (r.tingkat && String(r.tingkat).trim()) return String(r.tingkat).trim()
+  const nama = String(r.kelas || r.nama || '').trim()
+  if (!nama) return ''
+  const bersih = nama.toUpperCase().replace(/^KELAS\s+/, '')
+  const romawi = bersih.match(/^(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)\b/)
+  if (romawi) return romawi[1]
+  const angka = bersih.match(/^(\d{1,2})/)
+  if (angka && ANGKA_KE_ROMAWI_RPPM[angka[1]]) return ANGKA_KE_ROMAWI_RPPM[angka[1]]
+  return nama
+}
 
 export default function JadwalPelajaranPage() {
   const [userEmail, setUserEmail] = useState<string | null>(null)
@@ -116,14 +134,38 @@ export default function JadwalPelajaranPage() {
     return daftarGuru.filter((g: any) => (g.unitIds || []).includes(rppmUnitId))
   }, [daftarGuru, rppmUnitId])
 
+  // Mapel yang muncul HARUS mengikuti Guru YANG DIPILIH DAN Fase yang sedang aktif --
+  // hanya mapel yang benar-benar diampu guru tsb DI FASE ITU (dicek lewat mapelRombel:
+  // rombel yang diajar guru utk mapel tsb harus jatuh ke Fase yang sama). Kalau guru
+  // mengajar Informatika & Matematika di Fase E tapi hanya Informatika di Fase F,
+  // memilih Fase F hanya memunculkan Informatika. Data lama yang belum py mapelRombel
+  // (kosong) tetap ditampilkan apa adanya supaya tidak salah menyembunyikan mapel valid.
   const rppmDaftarMapelSesuaiGuru = useMemo(() => {
     if (!rppmGuruId) return daftarMapel
     const guru = daftarGuru.find((g: any) => g.id === rppmGuruId)
     if (!guru?.mapelIds?.length) return daftarMapel
-    return daftarMapel.filter((m: any) => guru.mapelIds.includes(m.id))
-  }, [daftarMapel, daftarGuru, rppmGuruId])
+    const sesuaiGuru = daftarMapel.filter((m: any) => guru.mapelIds.includes(m.id))
+    let hasil = sesuaiGuru
+    if (rppmFase) {
+      const kelasRomawiFase = new Set(KELAS_ROMAWI_PER_FASE[rppmFase] || [])
+      hasil = hasil.filter((m: any) => {
+        const rombelIds: string[] = guru.mapelRombel?.[m.id] || []
+        if (rombelIds.length === 0) return true
+        return rombelIds.some((rid: string) => {
+          const rombel = daftarRombel.find((r: any) => r.id === rid)
+          if (!rombel) return false
+          return kelasRomawiFase.has(tingkatRomawiDariRombelRppm(rombel))
+        })
+      })
+      // Jaga-jaga: kalau penyaringan per-Fase ternyata kosong total padahal guru
+      // sebenarnya punya mapel, jangan sampai Mapel jadi tidak bisa dipilih -- tampilkan
+      // semua mapel guru apa adanya daripada salah menyembunyikan mapel yang valid.
+      if (hasil.length === 0 && sesuaiGuru.length > 0) hasil = sesuaiGuru
+    }
+    return hasil
+  }, [daftarMapel, daftarGuru, rppmGuruId, rppmFase, daftarRombel])
 
-  // Reset berjenjang: Unit -> Fase/Guru, Guru -> Mapel
+  // Reset berjenjang: Unit -> Fase/Guru, Guru/Fase -> Mapel
   useEffect(() => {
     if (rppmFase && !rppmFaseTersedia.includes(rppmFase)) setRppmFase('')
     if (rppmGuruId && !rppmDaftarGuruSesuaiUnit.some((g: any) => g.id === rppmGuruId)) setRppmGuruId('')
@@ -133,7 +175,7 @@ export default function JadwalPelajaranPage() {
   useEffect(() => {
     if (rppmMapelId && !rppmDaftarMapelSesuaiGuru.some((m: any) => m.id === rppmMapelId)) setRppmMapelId('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rppmGuruId])
+  }, [rppmGuruId, rppmFase, rppmDaftarMapelSesuaiGuru])
 
   // C. Capaian Pembelajaran Umum -- diambil OTOMATIS dari modul CP, TP & ATP
   // (data_cp_umum), sesuai Mapel + Fase yang dipilih.

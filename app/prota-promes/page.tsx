@@ -44,7 +44,9 @@ import PratinjauPdfModal from '@/components/PratinjauPdfModal'
 import { Fragment, useEffect, useState, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
-import { kunciTahun } from '@/lib/tahunAjaran'
+import { kunciTahun, getTahunAjaranAktifId } from '@/lib/tahunAjaran'
+import { salinKunciPerMapel } from '@/lib/salinTahunAjaran'
+import SalinDariTahunLalu from '@/components/SalinDariTahunLalu'
 import { ambilIdentitasOtomatis } from '@/lib/identitasOtomatis'
 import { useAksesGuard } from '@/lib/useAksesGuard'
 import { bisaMengeditModul, getCakupanMengajarGuru } from '@/lib/aksesPeran'
@@ -1263,6 +1265,7 @@ export default function ProtaPromesPage() {
 
   const [filterGuruId, setFilterGuruId] = useState('')
   const [filterMapelId, setFilterMapelId] = useState('')
+  const [daftarTaLain, setDaftarTaLain] = useState<{id:string;nama:string}[]>([])
   const [filterRombelId, setFilterRombelId] = useState('')
   const [filterUnitId, setFilterUnitId] = useState('') // '' = Lembaga Pusat
   const [daftarLembaga, setDaftarLembaga] = useState<any[]>([])
@@ -1300,6 +1303,14 @@ export default function ProtaPromesPage() {
       const sg = localStorage.getItem('master_guru'); if (sg) setDaftarGuru(JSON.parse(sg))
       const sm = localStorage.getItem('master_mapel'); if (sm) setDaftarMapel(JSON.parse(sm))
       const sr = localStorage.getItem('master_rombel'); if (sr) setDaftarRombel(JSON.parse(sr))
+
+      try {
+        const rawTa = localStorage.getItem('master_tahun_ajaran')
+        if (rawTa) {
+          const daftar = JSON.parse(rawTa)
+          setDaftarTaLain(daftar.filter((t: any) => !t.aktif).map((t: any) => ({ id: t.id, nama: t.nama })))
+        }
+      } catch { /* abaikan */ }
 
       const scp = localStorage.getItem(kunciTahun('data_cp')); if (scp) setDaftarCp(JSON.parse(scp))
       const smt = localStorage.getItem(kunciTahun('data_materi')); if (smt) setDaftarMateri(JSON.parse(smt))
@@ -1396,6 +1407,70 @@ export default function ProtaPromesPage() {
   const mapelTerpilih = daftarMapel.find(m => m.id === filterMapelId)
   const rombelTerpilih = daftarRombel.find(r => r.id === filterRombelId)
   const tahunAjaran = semesterGanjil.tahunAjaran
+
+  // Union semua kelas yang diampu guru di SELURUH mapelRombel miliknya (dipakai sbg
+  // fallback ketika belum ada Kelas/Mapel spesifik dipilih -- lihat kedua useMemo di bawah).
+  const rombelIdGuruSeluruhMapel = useMemo(() => {
+    const set = new Set<string>()
+    Object.values(guruTerpilih?.mapelRombel || {}).forEach((ids: any) => (ids || []).forEach((id: string) => set.add(id)))
+    return set
+  }, [guruTerpilih])
+
+  // 3. Mata Pelajaran -- HARUS mengikuti Guru DAN Kelas yang sedang dipilih: kalau Kelas
+  // sudah dipilih, hanya mapel yang benar-benar diajar guru DI KELAS ITU (lewat
+  // mapelRombel) yang muncul -- mis. guru mengajar Informatika & Matematika di kelas 5-1
+  // tapi hanya Informatika di kelas 6-1, memilih kelas 6-1 hanya memunculkan Informatika.
+  const daftarMapelSesuaiGuruKelas = useMemo(() => {
+    const punyaMappingMapel = !!guruTerpilih?.mapelIds?.length
+    let list = (!filterGuruId || !punyaMappingMapel) ? daftarMapel : daftarMapel.filter(m => guruTerpilih?.mapelIds?.includes(m.id))
+    if (filterGuruId && filterRombelId && guruTerpilih?.mapelRombel) {
+      const listTersaring = list.filter(m => (guruTerpilih.mapelRombel?.[m.id] || []).includes(filterRombelId))
+      // Kalau ternyata kosong (mis. data mapelRombel utk kombinasi ini belum lengkap),
+      // jangan sampai dropdown Mapel jadi kosong total -- pakai daftar semula sbg jaga-jaga.
+      if (listTersaring.length > 0) list = listTersaring
+    }
+    return list
+  }, [filterGuruId, filterRombelId, guruTerpilih, daftarMapel])
+
+  // 4. Kelas / Rombel -- HARUS mengikuti Guru DAN Mapel yang sedang dipilih: kalau Mapel
+  // sudah dipilih, hanya kelas yang benar-benar diajar guru UNTUK MAPEL ITU (lewat
+  // mapelRombel[mapelId]) yang muncul -- bukan union semua kelas dari seluruh mapel lagi.
+  const daftarRombelSesuaiGuruMapel = useMemo(() => {
+    let list = daftarRombel
+    if (filterGuruId && guruTerpilih) {
+      if (filterMapelId) {
+        const rombelIdMapelIni = new Set(guruTerpilih.mapelRombel?.[filterMapelId] || [])
+        list = rombelIdMapelIni.size > 0
+          ? list.filter(r => rombelIdMapelIni.has(r.id))
+          : (rombelIdGuruSeluruhMapel.size > 0 ? list.filter(r => rombelIdGuruSeluruhMapel.has(r.id)) : list)
+      } else if (rombelIdGuruSeluruhMapel.size > 0) {
+        list = list.filter(r => rombelIdGuruSeluruhMapel.has(r.id))
+      }
+    }
+    if (filterUnitId) {
+      const listTersaring = list.filter(r => {
+        const t = daftarTingkat.find((tt: any) => tt.nama === r.tingkat)
+        return t?.lembagaId === filterUnitId
+      })
+      // Kalau penyaringan per-unit ternyata kosong (mis. data Master Tingkat belum
+      // lengkap mengaitkan ke unit), jangan sampai dropdown Kelas jadi kosong total --
+      // tampilkan semua kelas saja sebagai jaga-jaga, lebih baik daripada tidak muncul.
+      if (listTersaring.length > 0) list = listTersaring
+    }
+    return list
+  }, [filterGuruId, filterMapelId, guruTerpilih, daftarRombel, rombelIdGuruSeluruhMapel, filterUnitId, daftarTingkat])
+
+  // Reset silang: kalau Kelas berganti dan Mapel yang tadinya dipilih ternyata tidak
+  // diajar guru di kelas baru itu (atau sebaliknya), kosongkan supaya tidak salah data.
+  useEffect(() => {
+    if (filterMapelId && !daftarMapelSesuaiGuruKelas.some(m => m.id === filterMapelId)) setFilterMapelId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterRombelId, guruTerpilih])
+
+  useEffect(() => {
+    if (filterRombelId && !daftarRombelSesuaiGuruMapel.some(r => r.id === filterRombelId)) setFilterRombelId('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterMapelId, guruTerpilih])
 
   // Tingkat (master_tingkat) & unit (lembagaId) tempat rombel terpilih berada --
   // dicocokkan lewat tingkatId (field asli yang benar-benar disimpan di master_rombel,
@@ -1876,46 +1951,16 @@ export default function ProtaPromesPage() {
               <select value={filterMapelId} onChange={e => setFilterMapelId(e.target.value)}
                 className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-[#6A197D]">
                 <option value="">-- Pilih Mapel --</option>
-                {(() => {
-                  const punyaMappingMapel = !!guruTerpilih?.mapelIds?.length
-                  const list = (!filterGuruId || !punyaMappingMapel)
-                    ? daftarMapel
-                    : daftarMapel.filter(m => guruTerpilih?.mapelIds?.includes(m.id))
-                  return list.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)
-                })()}
+                {daftarMapelSesuaiGuruKelas.map(m => <option key={m.id} value={m.id}>{m.nama}</option>)}
               </select>
-              <p className="text-[9px] text-slate-400 mt-1">Otomatis mengikuti mapel yang diampu Guru terpilih.</p>
+              <p className="text-[9px] text-slate-400 mt-1">Otomatis mengikuti mapel yang diampu Guru terpilih di Kelas yang dipilih.</p>
             </div>
             <div>
               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">4. Kelas / Rombel</label>
               <select value={filterRombelId} onChange={e => setFilterRombelId(e.target.value)}
                 className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white font-semibold outline-none focus:ring-2 focus:ring-[#6A197D]">
                 <option value="">-- Pilih Kelas --</option>
-                {(() => {
-                  // PERBAIKAN: field "rombelIds" di data guru TIDAK PERNAH diisi
-                  // sama sekali oleh Kelola Data Guru -- yang benar-benar tersimpan
-                  // adalah "mapelRombel" (pemetaan per-mapel -> daftar kelas).
-                  // Union dari semua kelas di seluruh mapelRombel guru itulah yang
-                  // dipakai sebagai daftar kelas yang benar-benar diampu.
-                  const rombelIdGuru = new Set<string>()
-                  Object.values(guruTerpilih?.mapelRombel || {}).forEach((ids: any) => (ids || []).forEach((id: string) => rombelIdGuru.add(id)))
-                  const punyaMappingRombel = rombelIdGuru.size > 0
-                  let list = (!filterGuruId || !punyaMappingRombel)
-                    ? daftarRombel
-                    : daftarRombel.filter(r => rombelIdGuru.has(r.id))
-                  if (filterUnitId) {
-                    const listTersaring = list.filter(r => {
-                      const t = daftarTingkat.find((tt: any) => tt.nama === r.tingkat)
-                      return t?.lembagaId === filterUnitId
-                    })
-                    // Kalau penyaringan per-unit ternyata kosong (mis. data Master
-                    // Tingkat belum lengkap mengaitkan ke unit), jangan sampai
-                    // dropdown Kelas jadi kosong total -- tampilkan semua kelas
-                    // saja sebagai jaga-jaga, lebih baik daripada tidak muncul.
-                    if (listTersaring.length > 0) list = listTersaring
-                  }
-                  return list.map(r => <option key={r.id} value={r.id}>Kelas {konversiNamaKelasResmi(r, daftarTingkat, !!filterUnitId)}</option>)
-                })()}
+                {daftarRombelSesuaiGuruMapel.map(r => <option key={r.id} value={r.id}>Kelas {konversiNamaKelasResmi(r, daftarTingkat, !!filterUnitId)}</option>)}
               </select>
               {daftarRombel.length === 0 && (
                 <p className="text-[9px] text-rose-600 mt-1">
@@ -1924,6 +1969,21 @@ export default function ProtaPromesPage() {
               )}
             </div>
           </div>
+
+          {bolehEdit && filterMapelId && (
+            <div className="mt-4">
+              <SalinDariTahunLalu
+                daftarSumber={daftarTaLain}
+                label="Sudah punya CP/TP/ATP mapel ini di tahun lalu? Salin sebagai referensi:"
+                onSalin={(idSumber) => salinKunciPerMapel(
+                  ['data_cp', 'data_materi', 'data_tp', 'data_atp'],
+                  idSumber,
+                  getTahunAjaranAktifId(),
+                  [filterMapelId]
+                )}
+              />
+            </div>
+          )}
 
           {filterGuruId && filterMapelId && filterRombelId && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">

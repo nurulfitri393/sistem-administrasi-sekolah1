@@ -7,7 +7,9 @@ import Sidebar from '@/components/Sidebar'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
-import { kunciTahun } from '@/lib/tahunAjaran'
+import { kunciTahun, getTahunAjaranAktifId } from '@/lib/tahunAjaran'
+import { salinKunciUtuh } from '@/lib/salinTahunAjaran'
+import SalinDariTahunLalu from '@/components/SalinDariTahunLalu'
 import { muatGambarBase64 } from '@/lib/muatGambarBase64'
 import { useGoogleLogin } from '@react-oauth/google'
 import {
@@ -943,6 +945,7 @@ export default function KaldikPage() {
   const [namaSekolah,setNamaSekolah]=useState('')
   const [tahunAjaran,setTahunAjaran]=useState('')
   const [showCetakModal,setShowCetakModal]=useState(false)
+  const [daftarTaLain,setDaftarTaLain]=useState<{id:string;nama:string}[]>([])
 
   const presetColors=[
     {name:'Biru Navy',hex:'#1e3a8a'},{name:'Biru Royal',hex:'#1d4ed8'},{name:'Biru Standar',hex:'#2563eb'},{name:'Biru Terang',hex:'#3b82f6'},{name:'Biru Muda',hex:'#60a5fa'},{name:'Biru Langit',hex:'#0ea5e9'},
@@ -1018,6 +1021,11 @@ export default function KaldikPage() {
       const sr=localStorage.getItem('master_rombel');if(sr) setMasterRombelLokal(JSON.parse(sr))
       const sk=localStorage.getItem('kaldik_klasifikasi_list');if(sk){try{setDaftarKlasifikasiAgenda(JSON.parse(sk))}catch{}}
       const sa=localStorage.getItem(kunciTahun('kaldik_agenda_list'));if(sa){try{setDaftarAgenda(JSON.parse(sa))}catch{}}
+      // Daftar tahun ajaran LAIN (bukan periode aktif) -- sumber pilihan utk fitur "Salin dari Tahun Lalu".
+      try {
+        const rawTa=localStorage.getItem('master_tahun_ajaran')
+        if(rawTa){const daftar=JSON.parse(rawTa);setDaftarTaLain(daftar.filter((t:any)=>!t.aktif).map((t:any)=>({id:t.id,nama:t.nama})))}
+      } catch {}
       setLoading(false);setDataSiap(true)
     }
     checkUser()
@@ -1538,6 +1546,11 @@ export default function KaldikPage() {
         <section className="p-8 max-w-6xl mx-auto w-full space-y-8">
           {bolehEdit && (
           <>
+          <SalinDariTahunLalu
+            daftarSumber={daftarTaLain}
+            label="Sudah punya kaldik tahun lalu? Salin sebagai referensi:"
+            onSalin={(idSumber) => salinKunciUtuh(['kaldik_agenda_list'], idSumber, getTahunAjaranAktifId())}
+          />
           {/* Klasifikasi */}
           <div className="grid grid-cols-1 md:grid-cols-5 gap-8 bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
             <div className="md:col-span-3">

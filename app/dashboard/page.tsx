@@ -5,11 +5,12 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '../supabase'
-import { 
+import {
   Home, CalendarDays, Layers, BookOpen, LogOut,
   Building, FileText, Clock, BarChart2, FileSpreadsheet, Edit2,
-  Shield, Landmark, Plus, Trash2, Save
+  Shield, Landmark, Plus, Trash2, Save, Copy
 } from 'lucide-react'
+import { salinDataTahunAjaran, daftarKunciDasarUntukTahun } from '@/lib/salinTahunAjaran'
 
 export default function DashboardPage() {
   const [userEmail, setUserEmail] = useState<string | null>(null)
@@ -27,6 +28,8 @@ export default function DashboardPage() {
   const [daftarTa, setDaftarTa] = useState<any[]>([])
   const [namaTa, setNamaTa] = useState('')
   const [editTaId, setEditTaId] = useState<string | null>(null)
+  const [sumberSalinId, setSumberSalinId] = useState('')
+  const [jumlahBagianSalinTersedia, setJumlahBagianSalinTersedia] = useState(0)
 
   // Master Unit Lembaga (Cabang)
   const [daftarLembaga, setDaftarLembaga] = useState<any[]>([])
@@ -167,26 +170,45 @@ export default function DashboardPage() {
   }
 
   // --- CRUD TAHUN AJARAN ---
+  //
+  // AKAR MASALAH "tahun ajaran tiba-tiba berubah otomatis": SEBELUMNYA, submit
+  // form ini SELALU menjadikan entri yang disimpan sebagai periode AKTIF --
+  // termasuk saat admin cuma MENGEDIT NAMA (mis. memperbaiki typo) pada
+  // tahun ajaran ARSIP LAMA yang sedang tidak aktif. Akibatnya, memperbaiki
+  // nama arsip lama diam-diam memindahkan seluruh sistem ke periode lama itu,
+  // menutupi data tahun ajaran yang sedang berjalan (terlihat seperti "hilang").
+  //
+  // PERBAIKAN: mengedit nama SEKARANG TIDAK PERNAH mengubah status aktif --
+  // hanya tombol "Gunakan" (handleSetAktifTa) yang boleh memindahkan periode
+  // aktif. Menambah tahun ajaran BARU tetap otomatis mengaktifkannya (perilaku
+  // ini sudah diberitahukan lewat teks di UI & memang wajar diharapkan saat
+  // menambah periode baru).
   const handleSimpanTa = (e: React.FormEvent) => {
     e.preventDefault()
     if (!namaTa.trim()) return
 
-    let updatedTa = [...daftarTa]
-    const newTaList = updatedTa.map(item => ({ ...item, aktif: false }))
-
     if (editTaId) {
-      const index = newTaList.findIndex(item => item.id === editTaId)
-      if (index !== -1) {
-        newTaList[index] = { ...newTaList[index], nama: namaTa, aktif: true }
-      }
+      const updated = daftarTa.map(item => item.id === editTaId ? { ...item, nama: namaTa } : item)
+      setDaftarTa(updated)
+      localStorage.setItem('master_tahun_ajaran', JSON.stringify(updated))
       setEditTaId(null)
+      setNamaTa('')
     } else {
-      newTaList.push({ id: 'ta-' + Date.now(), nama: namaTa, aktif: true })
+      const namaBaru = namaTa
+      const newTaList = daftarTa.map(item => ({ ...item, aktif: false }))
+      newTaList.push({ id: 'ta-' + Date.now(), nama: namaBaru, aktif: true })
+      setDaftarTa(newTaList)
+      localStorage.setItem('master_tahun_ajaran', JSON.stringify(newTaList))
+      setNamaTa('')
+      // Periode aktif berubah -- muat ulang SEKARANG supaya perubahan ini
+      // langsung & KONSISTEN berlaku di seluruh halaman (lihat lib/tahunAjaran.ts:
+      // ID tahun ajaran dikunci sekali per sesi/tab begitu sinkronisasi awal
+      // selesai, justru supaya data yang sedang aktif dikerjakan TIDAK diam-diam
+      // pindah kunci di tengah sesi -- jadi mengganti periode aktif butuh muat
+      // ulang untuk diterapkan, ini SENGAJA, bukan bug).
+      alert(`Tahun ajaran aktif diubah ke "${namaBaru}". Halaman akan dimuat ulang untuk menerapkan perubahan ini di seluruh modul.`)
+      window.location.reload()
     }
-
-    setDaftarTa(newTaList)
-    localStorage.setItem('master_tahun_ajaran', JSON.stringify(newTaList))
-    setNamaTa('')
   }
 
   const handleEditTaClick = (item: any) => {
@@ -195,20 +217,61 @@ export default function DashboardPage() {
   }
 
   const handleSetAktifTa = (id: string) => {
+    const target = daftarTa.find(item => item.id === id)
     const updated = daftarTa.map(item => ({ ...item, aktif: item.id === id }))
     setDaftarTa(updated)
     localStorage.setItem('master_tahun_ajaran', JSON.stringify(updated))
+    alert(`Tahun ajaran aktif diubah ke "${target?.nama || ''}". Halaman akan dimuat ulang untuk menerapkan perubahan ini di seluruh modul.`)
+    window.location.reload()
   }
 
   const handleHapusTa = (id: string) => {
     if (confirm('Hapus data tahun ajaran ini? Semua log administrasi terkait periode ini akan ikut terpengaruh.')) {
+      const dihapusAktif = daftarTa.find(item => item.id === id)?.aktif
       const filtered = daftarTa.filter(item => item.id !== id)
       if (filtered.length > 0 && !filtered.some(item => item.aktif)) {
          filtered[0].aktif = true
       }
       setDaftarTa(filtered)
       localStorage.setItem('master_tahun_ajaran', JSON.stringify(filtered))
+      // Kalau yang dihapus BUKAN yang aktif, periode aktif tidak berubah -- tidak perlu reload.
+      if (dihapusAktif && filtered.length > 0) {
+        alert(`Tahun ajaran aktif diubah ke "${filtered[0].nama}" (periode aktif sebelumnya dihapus). Halaman akan dimuat ulang untuk menerapkan perubahan ini di seluruh modul.`)
+        window.location.reload()
+      }
     }
+  }
+
+  // --- SALIN DATA DARI TAHUN AJARAN LAIN (sebagai referensi, bukan pindah) ---
+  // Dipakai kalau tahun ajaran yang sedang berjalan ingin memakai ulang isi
+  // data tahun ajaran sebelumnya (mis. struktur CP/TP/ATP, jadwal, kaldik)
+  // supaya tidak perlu mengetik ulang dari nol. SEPENUHNYA manual/opt-in, dan
+  // TIDAK PERNAH menimpa data yang sudah ada di tahun ajaran tujuan (lihat
+  // lib/salinTahunAjaran.ts) -- data tetap "diam di kamarnya masing-masing"
+  // kecuali admin sendiri yang secara sadar memilih menyalinnya.
+  const tahunAjaranAktifSaatIni = daftarTa.find(item => item.aktif)
+
+  // Membaca localStorage HARUS di dalam efek, bukan langsung di JSX -- render
+  // harus tetap murni (tidak boleh langsung membaca sumber data mutable).
+  useEffect(() => {
+    if (!sumberSalinId) { setJumlahBagianSalinTersedia(0); return }
+    setJumlahBagianSalinTersedia(daftarKunciDasarUntukTahun(sumberSalinId).length)
+  }, [sumberSalinId])
+
+  const handleSalinData = () => {
+    if (!sumberSalinId || !tahunAjaranAktifSaatIni) return
+    const sumber = daftarTa.find(item => item.id === sumberSalinId)
+    if (!sumber) return
+    if (!confirm(`Salin data dari "${sumber.nama}" ke tahun ajaran aktif "${tahunAjaranAktifSaatIni.nama}"?\n\nHanya bagian yang MASIH KOSONG di "${tahunAjaranAktifSaatIni.nama}" yang akan diisi -- data yang sudah ada TIDAK akan ditimpa.`)) return
+    const hasil = salinDataTahunAjaran(sumberSalinId, tahunAjaranAktifSaatIni.id)
+    if (hasil.disalin.length === 0) {
+      alert(hasil.dilewatiSudahAdaData.length > 0
+        ? `Tidak ada yang disalin -- "${tahunAjaranAktifSaatIni.nama}" sudah punya data sendiri di semua bagian yang tersedia di "${sumber.nama}".`
+        : `Tidak ada data untuk disalin dari "${sumber.nama}".`)
+      return
+    }
+    alert(`Berhasil menyalin ${hasil.disalin.length} bagian data dari "${sumber.nama}" ke "${tahunAjaranAktifSaatIni.nama}". Halaman akan dimuat ulang supaya perubahan terlihat.`)
+    window.location.reload()
   }
 
   // --- CRUD LEMBAGA UNIT ---
@@ -354,7 +417,7 @@ export default function DashboardPage() {
                    <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider mb-1 block">Periode / Tahun Ajaran</label>
                    <input type="text" placeholder="Contoh: 2026/2027 atau 2027/2028" value={namaTa} onChange={e => setNamaTa(e.target.value)} className="w-full px-4 py-2.5 border rounded-xl text-sm outline-none focus:ring-2 focus:ring-[#8A3499]" required={!isGuru} disabled={isGuru} />
                 </div>
-                <p className="text-[9px] font-semibold text-slate-400 leading-relaxed">Menambahkan atau menyimpan tahun ajaran akan otomatis menjadikannya sebagai periode aktif yang berlaku pada sistem administrasi.</p>
+                <p className="text-[9px] font-semibold text-slate-400 leading-relaxed">Menambahkan tahun ajaran BARU akan otomatis menjadikannya periode aktif (halaman akan dimuat ulang). Mengedit nama tahun ajaran yang sudah ada TIDAK mengubah periode aktif -- gunakan tombol &quot;Gunakan&quot; di daftar arsip untuk berpindah periode.</p>
                 {!isGuru && (
                   <div className="flex gap-2 pt-2">
                      <button type="submit" className="flex-1 bg-[#6A197D] text-white py-3 rounded-xl font-baloo font-bold shadow-md hover:bg-[#57146A] transition">
@@ -363,8 +426,33 @@ export default function DashboardPage() {
                      {editTaId && <button type="button" onClick={() => { setEditTaId(null); setNamaTa('') }} className="px-5 bg-slate-100 rounded-xl font-baloo font-bold text-slate-600">Batal</button>}
                   </div>
                 )}
+
+                {!isGuru && daftarTa.length > 1 && tahunAjaranAktifSaatIni && (
+                  <div className="pt-4 mt-4 border-t border-slate-100 space-y-2">
+                     <label className="text-[10px] font-baloo font-bold text-slate-500 uppercase tracking-wider block flex items-center gap-1.5">
+                        <Copy className="w-3.5 h-3.5" /> Salin Data dari Tahun Ajaran Lain
+                     </label>
+                     <p className="text-[9px] font-semibold text-slate-400 leading-relaxed">
+                        Isi periode aktif (&quot;{tahunAjaranAktifSaatIni.nama}&quot;) dengan menyalin data dari periode lain sebagai referensi -- HANYA mengisi bagian yang masih kosong, data yang sudah ada tidak akan ditimpa.
+                     </p>
+                     <div className="flex gap-2">
+                        <select value={sumberSalinId} onChange={e => setSumberSalinId(e.target.value)} className="flex-1 px-3 py-2 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-[#8A3499]">
+                           <option value="">-- Pilih tahun ajaran sumber --</option>
+                           {daftarTa.filter(item => item.id !== tahunAjaranAktifSaatIni.id).map(item => (
+                             <option key={item.id} value={item.id}>{item.nama}</option>
+                           ))}
+                        </select>
+                        <button type="button" disabled={!sumberSalinId} onClick={handleSalinData} className="px-4 bg-[#F7ECFA] text-[#57146A] hover:bg-[#EFD9F5] disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-xs font-baloo font-bold transition">
+                           Salin
+                        </button>
+                     </div>
+                     {sumberSalinId && (
+                        <p className="text-[9px] text-slate-400">{jumlahBagianSalinTersedia} bagian data tersedia untuk disalin dari periode ini.</p>
+                     )}
+                  </div>
+                )}
              </form>
-             
+
              <div className="p-6 bg-slate-50/50 xl:col-span-2 max-h-[250px] overflow-y-auto">
                 <label className="text-[10px] font-baloo font-black text-slate-400 uppercase tracking-widest block mb-4">Arsip Periode Tahun Ajaran</label>
                 <div className="space-y-2">

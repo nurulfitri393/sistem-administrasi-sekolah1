@@ -8,7 +8,9 @@ import PratinjauPdfModal from '@/components/PratinjauPdfModal'
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
-import { kunciTahun } from '@/lib/tahunAjaran'
+import { kunciTahun, getTahunAjaranAktifId } from '@/lib/tahunAjaran'
+import { salinKunciUtuh } from '@/lib/salinTahunAjaran'
+import SalinDariTahunLalu from '@/components/SalinDariTahunLalu'
 import {
   Clock, Trash2, Landmark, LogOut, Shield, BookOpen, CheckCircle,
   Building, CalendarDays, BarChart2, FileText, FileSpreadsheet, Home,
@@ -1232,6 +1234,7 @@ export default function JadwalPelajaranPage() {
   const [daftarMapel, setDaftarMapel] = useState<any[]>([])
   const [daftarGuru, setDaftarGuru] = useState<any[]>([])
   const [tahunAjaranAktif, setTahunAjaranAktif] = useState('2025/2026')
+  const [daftarTaLain, setDaftarTaLain] = useState<{id:string;nama:string}[]>([])
 
   // --- Penjadwalan ---
   const [daftarJadwal, setDaftarJadwal] = useState<any[]>([])
@@ -1461,6 +1464,7 @@ export default function JadwalPelajaranPage() {
         const taList = JSON.parse(storedTa)
         const aktif = taList.find((t: any) => t.aktif)
         if (aktif) setTahunAjaranAktif(aktif.nama)
+        setDaftarTaLain(taList.filter((t: any) => !t.aktif).map((t: any) => ({ id: t.id, nama: t.nama })))
       }
 
       load('daftar_lembaga', setDaftarLembaga)
@@ -4157,6 +4161,13 @@ export default function JadwalPelajaranPage() {
                   <div className="bg-[#F7ECFA]/50 border border-[#F0DFF5] rounded-xl p-3 text-[10px] text-[#571466] font-semibold">
                     Tahun Ajaran mengikuti data yang aktif di halaman Dashboard: <strong>{tahunAjaranAktif}</strong>
                   </div>
+                  {bolehEdit && (
+                    <SalinDariTahunLalu
+                      daftarSumber={daftarTaLain}
+                      label="Sudah punya jadwal tahun lalu? Salin sebagai referensi:"
+                      onSalin={(idSumber) => salinKunciUtuh(Array.from(KUNCI_TAHUN_JADWAL), idSumber, getTahunAjaranAktifId())}
+                    />
+                  )}
                 </div>
 
                 <form onSubmit={handleSimpanTtd} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4 xl:col-span-1">
