@@ -55,20 +55,35 @@ export default function Sidebar() {
   useEffect(() => { setMobileOpen(false) }, [pathname])
 
   useEffect(() => {
-    const si = localStorage.getItem('identitas_induk')
-    if (si) {
-      try {
-        const p = JSON.parse(si)
-        setNamaInduk(p.nama || 'Lembaga / Yayasan Pusat')
-        setLogoInduk(p.logo_utama || p.logo || '')
-      } catch { /* abaikan */ }
+    const muatSemua = () => {
+      const si = localStorage.getItem('identitas_induk')
+      if (si) {
+        try {
+          const p = JSON.parse(si)
+          setNamaInduk(p.nama || 'Lembaga / Yayasan Pusat')
+          setLogoInduk(p.logo_utama || p.logo || '')
+        } catch { /* abaikan */ }
+      }
+      setAkses(getAksesInfo())
     }
-    setAkses(getAksesInfo())
+    muatSemua()
 
     supabase.auth.getSession().then(({ data }) => {
       const role = (data.session?.user?.user_metadata as any)?.role
       setIsAdminAsli(!!data.session && role !== 'guru')
     })
+
+    // AKAR MASALAH "sidebar/menu hilang di perangkat berbeda, baru muncul
+    // setelah refresh manual": muatSemua() di atas cuma jalan SEKALI saat mount
+    // -- kalau saat itu penarikan data dari cloud (lihat CloudSyncProvider)
+    // belum benar-benar selesai (koneksi lambat), master_guru/master_peran yang
+    // dibaca getAksesInfo() masih belum lengkap, membuat menu terlihat kosong/
+    // hilang. CloudSyncProvider mengirim sinyal 'cloud-sync-selesai' begitu
+    // penariakan itu SUNGGUH selesai (walau sudah lewat batas waktu tampil
+    // halamannya) -- dengarkan sinyal itu supaya menu dihitung ulang otomatis
+    // tanpa pengguna perlu refresh manual.
+    window.addEventListener('cloud-sync-selesai', muatSemua)
+    return () => window.removeEventListener('cloud-sync-selesai', muatSemua)
   }, [pathname])
 
   const handleLogout = async () => {

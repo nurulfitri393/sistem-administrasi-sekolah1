@@ -1278,17 +1278,34 @@ export default function CpTpAtpPage() {
   // Peta label tingkat (mis. "I") -> "Nama Kelas Resmi" yang diketik Admin di Master
   // Tingkat Kelas (Dashboard) -- dipakai labelKelasResmi() utk tampilan Lembaga Unit.
   // Kosong utk Tingkat yang tidak diisi Admin (tidak ada dugaan/konversi otomatis).
+  //
+  // AKAR MASALAH "dua kolom kelas SMA sama-sama tampil 'Kelas X'": SEBELUMNYA peta
+  // ini dibangun dari ROMBEL -- kuncinya diambil dari ambilTingkatDariRombel(r)
+  // (parsing NAMA rombel itu sendiri, mis. "5-1" -> "V"), tapi nilainya diambil
+  // dari Tingkat yang DITUNJUK rombel.tingkatId. Kalau admin salah pilih "Tingkat
+  // Induk" saat membuat rombel (mis. rombel "5-1", "5-2", "6-1", "6-2" semuanya
+  // kelupaan masih menunjuk ke Tingkat "Kelas 4" alih-alih "Kelas 5"/"Kelas 6" --
+  // kesalahan input yang lumrah terjadi), SEMUA rombel itu ikut memakai
+  // namaResmi milik "Kelas 4" ("X"), padahal namanya sendiri berbeda-beda --
+  // membuat peta["V"] dan peta["VI"] SALAH keduanya ikut jadi "X".
+  //
+  // PERBAIKAN: bangun peta ini LANGSUNG dari Master Tingkat Kelas (daftarTingkat)
+  // sendiri -- satu Tingkat, satu pasangan nama->namaResmi -- TIDAK bergantung
+  // sama sekali pada bagaimana rombel individual kebetulan diberi nama atau
+  // ditautkan. Ini membuat label resmi tetap benar walau ada rombel yang salah
+  // ditautkan ke Tingkat yang keliru (kesalahan itu sendiri tetap sebaiknya
+  // diperbaiki admin di Master Rombel, tapi TIDAK LAGI merusak tampilan label
+  // resmi kelas lain).
   const petaKelasResmi = useMemo(() => {
     const peta: Record<string, string> = {}
-    daftarRombel.forEach((r: any) => {
-      const t = daftarTingkat.find((tt: any) => tt.id === r.tingkatId)
-      if (t?.namaResmi) {
-        const label = ambilTingkatDariRombel(r)
+    daftarTingkat.forEach((t: any) => {
+      if (t?.namaResmi && t?.nama) {
+        const label = ambilTingkatDariRombel({ nama: t.nama })
         if (label) peta[label] = t.namaResmi
       }
     })
     return peta
-  }, [daftarRombel, daftarTingkat])
+  }, [daftarTingkat])
 
   // Kolom kelas yang relevan untuk papan ATP, berdasarkan jenjang fase terpilih
   const kolomKelasAtp = useMemo(() => {
@@ -1378,9 +1395,38 @@ export default function CpTpAtpPage() {
   // sekali dengan akun yang sedang login (persis bug "Rekap ATP antar pelajaran dan antar
   // akun bercampur" yang dilaporkan). Admin (cakupanGuru null) tetap melihat semuanya, sesuai
   // perannya yang memang mengelola seluruh mapel.
-  const daftarAtpUntukRekap = useMemo(() =>
-    (cakupanGuru && cakupanGuru.mapelIds.length > 0) ? daftarAtp.filter(a => cakupanGuru.mapelIds.includes(a.mapelId)) : daftarAtp,
-    [daftarAtp, cakupanGuru])
+  //
+  // AKAR MASALAH LANJUTAN (masih bercampur setelah perbaikan di atas): membatasi
+  // HANYA lewat mapelId tidak cukup kalau ada DUA GURU BERBEDA yang sama-sama
+  // mengampu mapel yang SAMA (mis. dua guru Matematika untuk kelas yang
+  // berbeda) -- keduanya lolos syarat "mapelId ada di cakupanGuru.mapelIds",
+  // padahal ATP itu milik rombel/kelas guru LAIN. PERBAIKAN: perketat lagi
+  // lewat cakupanGuru.mapelRombel (rombel spesifik yang diajar guru tsb UNTUK
+  // mapel itu) -- sama seperti pola yang sudah dipakai di daftarMapelSesuaiGuru
+  // di atas. Kalau guru belum punya data mapelRombel utk suatu mapel (data
+  // lama/belum diisi), tetap tampilkan apa adanya drpd salah menyembunyikan.
+  const daftarAtpUntukRekap = useMemo(() => {
+    if (!cakupanGuru || cakupanGuru.mapelIds.length === 0) return daftarAtp
+    const kelasPerMapelGuru: Record<string, Set<string>> = {}
+    cakupanGuru.mapelIds.forEach(mapelId => {
+      const rombelIds: string[] = cakupanGuru.mapelRombel?.[mapelId] || []
+      const labelSet = new Set<string>()
+      rombelIds.forEach(rid => {
+        const rombel = daftarRombel.find((r: any) => r.id === rid)
+        if (rombel) {
+          const label = ambilTingkatDariRombel(rombel)
+          if (label) labelSet.add(label)
+        }
+      })
+      kelasPerMapelGuru[mapelId] = labelSet
+    })
+    return daftarAtp.filter(a => {
+      if (!cakupanGuru.mapelIds.includes(a.mapelId)) return false
+      const labelSet = kelasPerMapelGuru[a.mapelId]
+      if (!labelSet || labelSet.size === 0) return true
+      return labelSet.has(a.kelas)
+    })
+  }, [daftarAtp, cakupanGuru, daftarRombel])
 
   const entriKelas = (kelas: string) =>
     filteredAtp.filter(a => a.kelas === kelas).sort((a,b) => a.urutanDiKelas - b.urutanDiKelas)

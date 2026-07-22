@@ -53,6 +53,18 @@ export default function CloudSyncProvider({ children }: { children: React.ReactN
         if (batasWaktuTerlewati && hasil.ok && hasil.adaPerubahan) {
           window.location.reload()
         }
+        // AKAR MASALAH "sidebar/menu hilang di perangkat berbeda, baru muncul
+        // setelah refresh manual": komponen seperti Sidebar menghitung hak akses
+        // (getAksesInfo(), baca 'master_guru'/'master_peran') HANYA SEKALI saat
+        // pertama mount, lewat useEffect-nya sendiri -- kalau itu terjadi PAS di
+        // jeda sebelum penarikan data ini benar-benar selesai (koneksi lambat),
+        // hasilnya dihitung dari data yang belum lengkap & TIDAK PERNAH dihitung
+        // ulang lagi kecuali pengguna pindah halaman atau me-refresh sendiri.
+        // Kirim sinyal SEKARANG (penarikan data benar-benar selesai, apapun
+        // apakah batas waktu 10 detik di bawah sempat lebih dulu terlewati atau
+        // tidak) supaya komponen semacam itu bisa menghitung ulang sendiri tanpa
+        // perlu refresh manual.
+        window.dispatchEvent(new CustomEvent('cloud-sync-selesai'))
       })
       .finally(() => {
         selesai = true
