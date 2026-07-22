@@ -4,7 +4,7 @@ import { bisaMengeditModul, getCakupanMengajarGuru } from '@/lib/aksesPeran'
 
 import Sidebar from '@/components/Sidebar'
 import PratinjauPdfModal from '@/components/PratinjauPdfModal'
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../supabase'
 import { kunciTahun, getTahunAjaranAktifId } from '@/lib/tahunAjaran'
@@ -200,7 +200,19 @@ export default function CpTpAtpPage() {
 
   const [daftarGuru, setDaftarGuru] = useState<any[]>([])
   const [daftarMapel, setDaftarMapel] = useState<any[]>([])
-  const daftarMapelTampil = cakupanGuru
+  // AKAR MASALAH "CP yang sudah ditulis guru terlihat hilang, tapi HANYA di
+  // perangkat guru itu sendiri (bukan di perangkat Admin)": kalau 'master_guru'
+  // belum selesai ditarik dari cloud saat halaman ini pertama dibuka di
+  // perangkat tsb (lihat lib/cloudSync.ts), getCakupanMengajarGuru() SEMENTARA
+  // mengembalikan cakupanGuru.mapelIds = [] (kosong, BUKAN karena guru itu
+  // sungguh tidak mengampu apapun, tapi karena datanya belum lengkap). Kalau
+  // syarat "cakupanGuru.mapelIds.includes(...)" diterapkan apa adanya, dropdown
+  // Mapel jadi KOSONG TOTAL untuk guru itu -- yang lalu membuat SEMUA data CP/
+  // TP/ATP miliknya (yang sebenarnya utuh) ikut terlihat hilang, karena tidak
+  // ada mapel yang bisa dipilih sama sekali. Sama seperti syarat serupa di
+  // bawah (bolehTampilMapel, daftarCpAmanUntukGuru, daftarAtpUntukRekap):
+  // HANYA batasi kalau mapelIds benar-benar sudah terisi.
+  const daftarMapelTampil = (cakupanGuru && cakupanGuru.mapelIds.length > 0)
     ? daftarMapel.filter(m => cakupanGuru.mapelIds.includes(m.id))
     : daftarMapel
   const [daftarRombel, setDaftarRombel] = useState<any[]>([])
@@ -236,9 +248,31 @@ export default function CpTpAtpPage() {
   // (bukan hardcode I-XII), supaya opsi kelas selalu sesuai kondisi sekolah. Dipindah ke
   // sini (sebelum cascade Guru->Mapel) karena daftarMapelSesuaiGuru di bawah butuh
   // kelasTerurutAngka utk menentukan Fase suatu rombel lewat hitungKolomKelas().
+  //
+  // AKAR MASALAH "konversi Fase E/F di Lembaga Unit SMA tidak akurat": SEBELUMNYA
+  // kelasTerdaftar SELALU mengumpulkan rombel dari SELURUH SEKOLAH (semua Unit
+  // digabung jadi satu, tanpa peduli filterUnitId sama sekali), lalu
+  // hitungKolomKelas() menebak Fase E/F murni dari POSISI (3 kelas terakhir =
+  // SMA). Kalau ada Unit LAIN yang kebetulan memakai label kelas yang sama
+  // (mis. Unit lain juga punya "kelas 4/5/6", atau jumlah total kelas se-sekolah
+  // tidak persis kelipatan 3), posisi "3 terakhir" itu bisa meleset dari yang
+  // sesungguhnya milik Unit SMA.
+  //
+  // PERBAIKAN: kalau sedang melihat SATU Unit tertentu (filterUnitId terisi),
+  // batasi HANYA ke Tingkat yang memang terdaftar milik Unit itu (lewat Master
+  // Tingkat Kelas -> field lembagaId, dicocokkan lewat rombel.tingkatId) --
+  // supaya Fase E/F dihitung murni dari kelas milik Unit SMA itu sendiri, tidak
+  // tercampur data Unit lain. Rombel lama yang belum py tingkatId (data lama)
+  // tetap diikutkan apa adanya (tidak difilter) supaya tidak salah menyembunyikan
+  // data yang valid. Saat melihat Lembaga Pusat (filterUnitId kosong), perilaku
+  // gabungan semua Unit tetap seperti sebelumnya.
   const kelasTerdaftar = useMemo(() => {
+    const idTingkatUnitIni = filterUnitId
+      ? new Set(daftarTingkat.filter((t: any) => t.lembagaId === filterUnitId).map((t: any) => t.id))
+      : null
     const set = new Set<string>()
     daftarRombel.forEach((r: any) => {
+      if (idTingkatUnitIni && r.tingkatId && !idTingkatUnitIni.has(r.tingkatId)) return
       const t = ambilTingkatDariRombel(r)
       if (t) set.add(t)
     })
@@ -246,7 +280,7 @@ export default function CpTpAtpPage() {
     const lainnya = Array.from(set).filter(k => !KELAS_OPTIONS_FALLBACK.includes(k)).sort()
     const hasil = [...dikenal, ...lainnya]
     return hasil.length > 0 ? hasil : KELAS_OPTIONS_FALLBACK
-  }, [daftarRombel])
+  }, [daftarRombel, filterUnitId, daftarTingkat])
 
   // Kelas terdaftar, diurutkan dari yang paling rendah — dasar untuk menentukan
   // kolom kelas per fase (lihat hitungKolomKelas)
@@ -1263,23 +1297,61 @@ export default function CpTpAtpPage() {
     return hitungKolomKelas(filterFase, kelasTerurutAngka)
   }, [filterFase, kelasTerurutAngka, kelasTerdaftar])
 
+  // AKAR MASALAH "CP mapel/akun guru lain muncul semua sebelum difilter": kondisi
+  // "!filterMapelId" di bawah ini SENGAJA dipakai supaya Admin (yang belum pilih
+  // mapel apapun) tetap bisa melihat SEMUA CP/TP/ATP lintas mapel -- tapi untuk
+  // akun Guru yang mengampu LEBIH DARI SATU mapel, filterMapelId ikut kosong
+  // ('') sampai guru itu SENDIRI memilih salah satu dari dropdown (auto-pilih
+  // hanya berjalan kalau guru itu cuma ampu 1 mapel) -- selama filterMapelId
+  // masih kosong, "!filterMapelId" bernilai true dan CP/TP/ATP SEMUA mapel dari
+  // SEMUA guru lain ikut tampil, persis yang dilaporkan.
+  //
+  // PERBAIKAN: kalau akun yang login adalah Guru (cakupanGuru terisi), batasi
+  // SELALU ke mapel yang memang diampunya (cakupanGuru.mapelIds) sebagai lapis
+  // pertama -- baru di atas itu diperketat lagi ke filterMapelId spesifik kalau
+  // memang sudah dipilih. Admin (cakupanGuru null) tidak terpengaruh sama sekali.
+  //
+  // AKAR MASALAH LANJUTAN (ditemukan setelah perbaikan di atas terkirim): di
+  // PERANGKAT guru yang masih "dingin" (localStorage kosong/baru, cloud sync
+  // 'master_guru' belum selesai ditarik saat halaman ini pertama kali dibuka --
+  // lihat lib/cloudSync.ts), getCakupanMengajarGuru() SEMENTARA mengembalikan
+  // cakupanGuru.mapelIds = [] (bukan null, cuma KOSONG) karena data guru itu
+  // sendiri belum ketemu di 'master_guru' yang belum lengkap. Kalau syarat di
+  // atas diterapkan APA ADANYA, mapelIds kosong itu membuat SEMUA CP/TP/ATP
+  // ikut tersembunyi -- padahal datanya sendiri UTUH, cuma jadi "kelihatan
+  // hilang" gara-gara guru itu (sementara) dianggap tidak mengampu mapel
+  // apapun. Persis gejala yang dilaporkan: di laptop admin (cakupanGuru null,
+  // tidak kena syarat ini) data terlihat normal, di laptop guru sendiri (baru
+  // pertama dipakai / localStorage belum "hangat") datanya seperti hilang.
+  //
+  // PERBAIKAN LANJUTAN: HANYA terapkan pembatasan kalau cakupanGuru.mapelIds
+  // benar-benar SUDAH terisi (>0) -- kalau masih kosong (bisa berarti belum
+  // selesai sinkron, ATAU guru itu sungguh belum ditugaskan mapel apapun --
+  // di kasus itu memang tidak ada CP miliknya utk disembunyikan/ditampilkan
+  // sama sekali, jadi tidak ada risiko bocor), jangan sampai menyembunyikan
+  // data yang sebenarnya ada.
+  const bolehTampilMapel = useCallback((mapelId: string) =>
+    (!cakupanGuru || cakupanGuru.mapelIds.length === 0 || cakupanGuru.mapelIds.includes(mapelId)) &&
+    (!filterMapelId || mapelId === filterMapelId),
+    [cakupanGuru, filterMapelId])
+
   const filteredCp = useMemo(() =>
     daftarCp.filter(c =>
-      (!filterMapelId || c.mapelId === filterMapelId) &&
+      bolehTampilMapel(c.mapelId) &&
       (!filterFase || c.fase === filterFase)
-    ), [daftarCp, filterMapelId, filterFase])
+    ), [daftarCp, filterFase, bolehTampilMapel])
 
   const filteredMateri = useMemo(() =>
     daftarMateri.filter(m =>
-      (!filterMapelId || m.mapelId === filterMapelId) &&
+      bolehTampilMapel(m.mapelId) &&
       (!filterFase || m.fase === filterFase)
-    ), [daftarMateri, filterMapelId, filterFase])
+    ), [daftarMateri, filterFase, bolehTampilMapel])
 
   const filteredTp = useMemo(() =>
     daftarTp.filter(t =>
-      (!filterMapelId || t.mapelId === filterMapelId) &&
+      bolehTampilMapel(t.mapelId) &&
       (!filterFase || t.fase === filterFase)
-    ), [daftarTp, filterMapelId, filterFase])
+    ), [daftarTp, filterFase, bolehTampilMapel])
 
   // TP yang sudah ditulis tapi BELUM dipetakan ke kelas manapun
   const tpBelumDipetakan = useMemo(() =>
@@ -1288,8 +1360,16 @@ export default function CpTpAtpPage() {
 
   // ATP (TP yang sudah dipetakan) untuk Mapel + Fase terpilih
   const filteredAtp = useMemo(() =>
-    daftarAtp.filter(a => (!filterMapelId || a.mapelId === filterMapelId) && (!filterFase || a.fase === filterFase)),
-    [daftarAtp, filterMapelId, filterFase])
+    daftarAtp.filter(a => bolehTampilMapel(a.mapelId) && (!filterFase || a.fase === filterFase)),
+    [daftarAtp, filterFase, bolehTampilMapel])
+
+  // Dipakai sbg fallback dropdown "CP Rujukan" (form Materi & TP) kalau filteredCp
+  // (yang juga terikat filterFase) sedang kosong -- SEBELUMNYA fallback itu
+  // memakai daftarCp MENTAH (semua mapel semua guru), bocor persis seperti bug
+  // di atas. Dibatasi ke mapel guru sendiri saja (Admin tetap melihat semua).
+  const daftarCpAmanUntukGuru = useMemo(() =>
+    (cakupanGuru && cakupanGuru.mapelIds.length > 0) ? daftarCp.filter(c => cakupanGuru.mapelIds.includes(c.mapelId)) : daftarCp,
+    [daftarCp, cakupanGuru])
 
   // Dipakai KHUSUS oleh tab Rekap ATP -- daftarAtp sendiri berisi SEMUA mapel/fase yang
   // pernah diisi siapapun untuk tahun ajaran ini (data mentah, tidak difilter). Untuk akun
@@ -1299,7 +1379,7 @@ export default function CpTpAtpPage() {
   // akun bercampur" yang dilaporkan). Admin (cakupanGuru null) tetap melihat semuanya, sesuai
   // perannya yang memang mengelola seluruh mapel.
   const daftarAtpUntukRekap = useMemo(() =>
-    cakupanGuru ? daftarAtp.filter(a => cakupanGuru.mapelIds.includes(a.mapelId)) : daftarAtp,
+    (cakupanGuru && cakupanGuru.mapelIds.length > 0) ? daftarAtp.filter(a => cakupanGuru.mapelIds.includes(a.mapelId)) : daftarAtp,
     [daftarAtp, cakupanGuru])
 
   const entriKelas = (kelas: string) =>
@@ -1625,7 +1705,7 @@ export default function CpTpAtpPage() {
                   <select value={formMateri.cpId||''} onChange={e => setFormMateri({...formMateri, cpId: e.target.value})}
                     className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-amber-500 bg-white">
                     <option value="">-- Pilih CP Rujukan --</option>
-                    {(filteredCp.length === 0 ? daftarCp : filteredCp).map(c => {
+                    {(filteredCp.length === 0 ? daftarCpAmanUntukGuru : filteredCp).map(c => {
                       const nm = daftarMapel.find(m => m.id === c.mapelId)?.nama || '-'
                       return <option key={c.id} value={c.id}>[{nm} | Fase {c.fase}{c.elemen ? ` | ${c.elemen}` : ''}] {c.deskripsi.slice(0,80)}...</option>
                     })}
@@ -1745,7 +1825,7 @@ export default function CpTpAtpPage() {
                     <select value={formTp.cpId||''} onChange={e => setFormTp({...formTp, cpId: e.target.value, materiId: ''})}
                       className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-blue-500 bg-white">
                       <option value="">-- Pilih CP Rujukan --</option>
-                      {(filteredCp.length === 0 ? daftarCp : filteredCp).map(c => {
+                      {(filteredCp.length === 0 ? daftarCpAmanUntukGuru : filteredCp).map(c => {
                         const nm = daftarMapel.find(m => m.id === c.mapelId)?.nama || '-'
                         return <option key={c.id} value={c.id}>[{nm} | Fase {c.fase}{c.elemen ? ` | ${c.elemen}` : ''}] {c.deskripsi.slice(0,60)}...</option>
                       })}

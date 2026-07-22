@@ -318,12 +318,29 @@ export async function tarikDataDariCloud(): Promise<{ ok: boolean; error?: strin
       // LAMA, dari sebelum perubahan lokal yang belum terkonfirmasi itu).
       const daftarBelumTerkirim = bacaDaftarBelumTerkirim()
       let adaPerubahan = false
+      // AKAR MASALAH lain yang mungkin: sebelumnya loop ini TIDAK dilindungi
+      // try/catch PER-BARIS -- kalau menulis SATU key saja ke localStorage
+      // gagal (mis. localStorage.setItem melempar QuotaExceededError karena
+      // perangkat itu sudah dekat batas kuota penyimpanan browser -- sekolah
+      // ini menyimpan logo/TTD sebagai base64 yang bisa cukup besar, lihat
+      // lib/muatGambarBase64.ts), exception itu langsung menghentikan SELURUH
+      // loop -- semua key SETELAHNYA (bisa saja termasuk 'master_guru') tidak
+      // pernah sempat ditulis ulang sama sekali di sesi itu. Ini bisa terjadi
+      // BERULANG-ULANG di perangkat yang sama (bukan cuma sekali di awal
+      // pemakaian) selama perangkat itu tetap dekat batas kuotanya -- beda dari
+      // perangkat lain yang kebetulan masih ada banyak sisa kuota. PERBAIKAN:
+      // lindungi PER-BARIS, supaya satu key yang gagal ditulis tidak menahan
+      // key-key lain yang sebenarnya tidak bermasalah.
       for (const row of data as { key: string; value: string | null }[]) {
         if (harusDikecualikan(row.key)) continue
         if (Object.prototype.hasOwnProperty.call(daftarBelumTerkirim, row.key)) continue
         const nilaiBaru = row.value ?? ''
-        if (window.localStorage.getItem(row.key) !== nilaiBaru) adaPerubahan = true
-        tulisLokalTanpaKirimUlang(row.key, nilaiBaru)
+        try {
+          if (window.localStorage.getItem(row.key) !== nilaiBaru) adaPerubahan = true
+          tulisLokalTanpaKirimUlang(row.key, nilaiBaru)
+        } catch (eBaris) {
+          console.warn('[cloudSync] Gagal menulis satu key ke localStorage (mis. kuota penuh), lanjut ke key berikutnya:', row.key, eBaris)
+        }
       }
       // Coba kirim ulang SEMUA perubahan yang masih tercatat belum terkonfirmasi --
       // baik yang barusan dilindungi dari tertimpa di atas, MAUPUN yang belum

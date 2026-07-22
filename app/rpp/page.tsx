@@ -32,13 +32,6 @@ function faseUntukUnitRppm(namaUnit: string): string[] {
   if (/\bSMA\b|\bSMK\b|\bMA\b/.test(n)) return ['E', 'F']
   return FASE_OPTIONS_RPPM
 }
-// Data ATP menyimpan "kelas" sebagai angka romawi (I..XII), BUKAN nama fase
-// langsung -- peta ini dipakai untuk mencocokkan Fase yang dipilih di RPPM
-// dengan kelas-kelas romawi yang termasuk di dalamnya.
-const KELAS_ROMAWI_PER_FASE: Record<string, string[]> = {
-  A: ['I', 'II'], B: ['III', 'IV'], C: ['V', 'VI'],
-  D: ['VII', 'VIII', 'IX'], E: ['X'], F: ['XI', 'XII'],
-}
 const ANGKA_KE_ROMAWI_RPPM: Record<string, string> = {
   '1':'I','2':'II','3':'III','4':'IV','5':'V','6':'VI','7':'VII','8':'VIII','9':'IX','10':'X','11':'XI','12':'XII'
 }
@@ -58,6 +51,46 @@ function tingkatRomawiDariRombelRppm(r: any): string {
   return nama
 }
 
+// AKAR MASALAH "Fase E/F di RPP tidak cocok sama sekali utk sekolah yang tidak
+// memakai penomoran X/XI/XII secara harfiah": KELAS_ROMAWI_PER_FASE SEBELUMNYA
+// mematok Fase E = HANYA "X", Fase F = HANYA "XI"/"XII" -- kalau kelas SMA
+// sekolah ini didaftarkan dgn label lain (mis. "4","5","6", yang dikonversi
+// tingkatRomawiDariRombelRppm() jadi romawi NILAI ke-4/5/6 = "IV"/"V"/"VI",
+// BUKAN "X"/"XI"/"XII"), pencocokan itu tidak PERNAH ketemu sama sekali --
+// Fase E/F di RPP jadi kosong total, bukan cuma tidak akurat. Ini persis pola
+// yang sama seperti bug "Fase E/F di CP/TP/ATP tidak akurat" yang sudah
+// diperbaiki di app/cp-tp-atp/page.tsx -- diperbaiki dgn cara yang SAMA di
+// sini: tentukan Fase E/F dari POSISI kelas yang terurut (bukan dari nilai
+// romawi yang dipatok), dan dibatasi ke Tingkat milik Unit yang sedang dipilih
+// (lewat Master Tingkat Kelas -> lembagaId) supaya tidak tercampur Unit lain.
+const KELAS_OPTIONS_FALLBACK_RPPM = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII']
+const ROMAWI_KE_ANGKA_RPPM: { [k: string]: number } = {
+  I:1, II:2, III:3, IV:4, V:5, VI:6, VII:7, VIII:8, IX:9, X:10, XI:11, XII:12
+}
+function angkaDariKelasRppm(label: string): number | null {
+  if (!label) return null
+  const bersih = label.trim().toUpperCase().replace(/^KELAS\s+/, '')
+  if (ROMAWI_KE_ANGKA_RPPM[bersih] != null) return ROMAWI_KE_ANGKA_RPPM[bersih]
+  const angka = bersih.match(/(\d{1,2})/)
+  if (angka) return parseInt(angka[1], 10)
+  return null
+}
+// Sama persis dgn hitungKolomKelas di app/cp-tp-atp/page.tsx -- lihat komentar
+// lengkap di sana. Murni berbasis POSISI (bukan nilai absolut) supaya benar
+// utk penomoran kelas apapun yang dipakai sekolah.
+function hitungKolomKelasRppm(fase: string, kelasUrut: string[]): string[] {
+  if (kelasUrut.length === 0) return []
+  const n = kelasUrut.length
+  const smaBucket = kelasUrut.slice(Math.max(0, n - 3))
+  const smpBucket = kelasUrut.slice(Math.max(0, n - 6), Math.max(0, n - 3))
+  const sdBucket = kelasUrut.slice(0, Math.max(0, n - 6))
+  if (fase === 'A' || fase === 'B' || fase === 'C') return sdBucket.length > 0 ? sdBucket : kelasUrut
+  if (fase === 'D') return smpBucket.length > 0 ? smpBucket : kelasUrut
+  if (fase === 'E') return smaBucket.length > 0 ? [smaBucket[0]] : kelasUrut
+  if (fase === 'F') return smaBucket.length > 1 ? smaBucket.slice(1) : kelasUrut
+  return kelasUrut
+}
+
 export default function JadwalPelajaranPage() {
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -70,6 +103,7 @@ export default function JadwalPelajaranPage() {
   // Referensi Data Master
   const [daftarLembaga, setDaftarLembaga] = useState<any[]>([])
   const [daftarRombel, setDaftarRombel] = useState<any[]>([])
+  const [daftarTingkat, setDaftarTingkat] = useState<any[]>([])
   const [daftarMapel, setDaftarMapel] = useState<any[]>([])
   const [daftarGuru, setDaftarGuru] = useState<any[]>([])
   // Unit-unit tempat Guru yang sedang login ditugaskan (bisa lebih dari satu, mis. guru
@@ -134,6 +168,34 @@ export default function JadwalPelajaranPage() {
     return daftarGuru.filter((g: any) => (g.unitIds || []).includes(rppmUnitId))
   }, [daftarGuru, rppmUnitId])
 
+  // Kelas yang terdaftar, dibatasi ke Unit yang sedang dipilih (lewat Master
+  // Tingkat Kelas -> lembagaId) -- dasar penentuan Fase E/F posisional, sama
+  // persis dgn kelasTerdaftar di app/cp-tp-atp/page.tsx. Lihat komentar di atas
+  // hitungKolomKelasRppm() utk penjelasan lengkap akar masalahnya.
+  const kelasTerdaftarRppm = useMemo(() => {
+    const idTingkatUnitIni = rppmUnitId
+      ? new Set(daftarTingkat.filter((t: any) => t.lembagaId === rppmUnitId).map((t: any) => t.id))
+      : null
+    const set = new Set<string>()
+    daftarRombel.forEach((r: any) => {
+      if (idTingkatUnitIni && r.tingkatId && !idTingkatUnitIni.has(r.tingkatId)) return
+      const t = tingkatRomawiDariRombelRppm(r)
+      if (t) set.add(t)
+    })
+    const dikenal = KELAS_OPTIONS_FALLBACK_RPPM.filter(k => set.has(k))
+    const lainnya = Array.from(set).filter(k => !KELAS_OPTIONS_FALLBACK_RPPM.includes(k)).sort()
+    const hasil = [...dikenal, ...lainnya]
+    return hasil.length > 0 ? hasil : KELAS_OPTIONS_FALLBACK_RPPM
+  }, [daftarRombel, rppmUnitId, daftarTingkat])
+
+  const kelasTerurutAngkaRppm = useMemo(() => {
+    return [...kelasTerdaftarRppm]
+      .map(k => ({ label: k, n: angkaDariKelasRppm(k) }))
+      .filter((x): x is { label: string; n: number } => x.n != null)
+      .sort((a, b) => a.n - b.n)
+      .map(x => x.label)
+  }, [kelasTerdaftarRppm])
+
   // Mapel yang muncul HARUS mengikuti Guru YANG DIPILIH DAN Fase yang sedang aktif --
   // hanya mapel yang benar-benar diampu guru tsb DI FASE ITU (dicek lewat mapelRombel:
   // rombel yang diajar guru utk mapel tsb harus jatuh ke Fase yang sama). Kalau guru
@@ -147,7 +209,7 @@ export default function JadwalPelajaranPage() {
     const sesuaiGuru = daftarMapel.filter((m: any) => guru.mapelIds.includes(m.id))
     let hasil = sesuaiGuru
     if (rppmFase) {
-      const kelasRomawiFase = new Set(KELAS_ROMAWI_PER_FASE[rppmFase] || [])
+      const kelasRomawiFase = new Set(hitungKolomKelasRppm(rppmFase, kelasTerurutAngkaRppm))
       hasil = hasil.filter((m: any) => {
         const rombelIds: string[] = guru.mapelRombel?.[m.id] || []
         if (rombelIds.length === 0) return true
@@ -163,7 +225,7 @@ export default function JadwalPelajaranPage() {
       if (hasil.length === 0 && sesuaiGuru.length > 0) hasil = sesuaiGuru
     }
     return hasil
-  }, [daftarMapel, daftarGuru, rppmGuruId, rppmFase, daftarRombel])
+  }, [daftarMapel, daftarGuru, rppmGuruId, rppmFase, daftarRombel, kelasTerurutAngkaRppm])
 
   // Reset berjenjang: Unit -> Fase/Guru, Guru/Fase -> Mapel
   useEffect(() => {
@@ -200,7 +262,7 @@ export default function JadwalPelajaranPage() {
       const daftarAtpRaw = localStorage.getItem(kunciTahun('data_atp'))
       const daftarTpX = daftarTpRaw ? JSON.parse(daftarTpRaw) : []
       const daftarAtpX = daftarAtpRaw ? JSON.parse(daftarAtpRaw) : []
-      const daftarKelasRomawi = KELAS_ROMAWI_PER_FASE[rppmFase] || []
+      const daftarKelasRomawi = hitungKolomKelasRppm(rppmFase, kelasTerurutAngkaRppm)
       return daftarAtpX
         .filter((a: any) => a.mapelId === rppmMapelId && daftarKelasRomawi.includes(a.kelas))
         .sort((x: any, y: any) => (x.urutanDiKelas || 0) - (y.urutanDiKelas || 0))
@@ -211,7 +273,7 @@ export default function JadwalPelajaranPage() {
     } catch {
       return []
     }
-  }, [rppmMapelId, rppmFase])
+  }, [rppmMapelId, rppmFase, kelasTerurutAngkaRppm])
 
   const router = useRouter()
   const listHari = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu']
@@ -254,6 +316,9 @@ export default function JadwalPelajaranPage() {
 
         const storedRombel = localStorage.getItem('master_rombel')
         if (storedRombel) setDaftarRombel(JSON.parse(storedRombel))
+
+        const storedTingkat = localStorage.getItem('master_tingkat')
+        if (storedTingkat) setDaftarTingkat(JSON.parse(storedTingkat))
 
         const storedMapel = localStorage.getItem('master_mapel')
         if (storedMapel) setDaftarMapel(JSON.parse(storedMapel))
