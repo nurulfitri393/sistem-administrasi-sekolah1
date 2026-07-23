@@ -1314,8 +1314,7 @@ export default function JadwalPelajaranPage() {
       const existing = daftarJadwal.find(j => j.hari === hari && j.waktuId === waktuId && j.rombelId === rombelId)
       if (existing) {
         const f = daftarJadwal.filter(j => j.id !== existing.id)
-        setDaftarJadwal(f)
-        save('data_jadwal_pelajaran', f)
+        setDaftarJadwal(saveArrayAman('data_jadwal_pelajaran', daftarJadwal, f, setDaftarJadwal))
       }
       setEditingCell(null); setEditGuruMapel(''); setEditJumlahJp(null); setCariGuruMapel('')
     }
@@ -1488,8 +1487,7 @@ export default function JadwalPelajaranPage() {
           const adaSabtu = jadwalArr.some((j: any) => j.hari === 'Sabtu')
           if (adaSabtu) {
             const bersih = jadwalArr.filter((j: any) => j.hari !== 'Sabtu')
-            setDaftarJadwal(bersih)
-            save('data_jadwal_pelajaran', bersih)
+            setDaftarJadwal(saveArrayAman('data_jadwal_pelajaran', jadwalArr, bersih, setDaftarJadwal))
           }
         }
         const tetapMentah = localStorage.getItem('master_jadwal_tetap')
@@ -1498,8 +1496,7 @@ export default function JadwalPelajaranPage() {
           const adaSabtuTetap = tetapArr.some((j: any) => j.hari === 'Sabtu')
           if (adaSabtuTetap) {
             const bersihTetap = tetapArr.filter((j: any) => j.hari !== 'Sabtu')
-            setDaftarJadwalTetap(bersihTetap)
-            save('master_jadwal_tetap', bersihTetap)
+            setDaftarJadwalTetap(saveArrayAman('master_jadwal_tetap', tetapArr, bersihTetap, setDaftarJadwalTetap))
           }
         }
         const giliranMentah = localStorage.getItem('master_jadwal_giliran')
@@ -1508,8 +1505,7 @@ export default function JadwalPelajaranPage() {
           const adaSabtuGiliran = giliranArr.some((j: any) => j.hari === 'Sabtu')
           if (adaSabtuGiliran) {
             const bersihGiliran = giliranArr.filter((j: any) => j.hari !== 'Sabtu')
-            setDaftarJadwalGiliran(bersihGiliran)
-            save('master_jadwal_giliran', bersihGiliran)
+            setDaftarJadwalGiliran(saveArrayAman('master_jadwal_giliran', giliranArr, bersihGiliran, setDaftarJadwalGiliran))
           }
         }
       } catch (e) {
@@ -1634,6 +1630,84 @@ export default function JadwalPelajaranPage() {
   const kunciAsli = (key: string) => KUNCI_TAHUN_JADWAL.has(key) ? kunciTahun(key) : key
   const save = (key: string, data: any) => localStorage.setItem(kunciAsli(key), JSON.stringify(data))
 
+  // AKAR MASALAH (sama persis dengan yang pernah ditemukan & diperbaiki di CP/TP/ATP):
+  // data_jadwal_pelajaran, master_jadwal_tetap, master_jadwal_giliran, master_kelas_gabungan,
+  // master_larangan_beriringan, dan master_pemetaan_waktu adalah larik BERSAMA yang bisa
+  // diedit oleh LEBIH DARI SATU akun (Admin dan/atau Guru dengan akses modul "jadwal").
+  // save(key, data) di atas menimpa localStorage/cloud APA ADANYA dengan versi di memori --
+  // kalau tab/perangkat yang menyimpan itu cerminnya SEMPAT KETINGGALAN (mis. koneksi
+  // Realtime putus sesaat tanpa tanda apapun di UI), entri milik pengguna LAIN yang belum
+  // sempat masuk ke cermin tsb bisa ikut TERHAPUS SUNGGUHAN dari cloud saat ditimpa balik --
+  // walau tindakan yang dilakukan sama sekali tidak menyentuh entri itu.
+  //
+  // PERBAIKAN: saveArrayAman() menulis versi optimistik dulu (dari cermin lokal, UI tetap
+  // instan), lalu SEGERA merekonsiliasi ulang di latar belakang memakai baris ASLI dari
+  // Supabase sebagai dasar gabungan -- kalau berbeda dari versi optimistik (karena dasarnya
+  // tadi ketinggalan), localStorage & state dikoreksi otomatis ke versi yang benar.
+  function gabungkanArrayId<T extends { id: string }>(dariDasar: T[], before: T[], updated: T[]): T[] {
+    const petaBefore = new Map(before.map(i => [i.id, i]))
+    const petaUpdated = new Map(updated.map(i => [i.id, i]))
+    const idDihapus = new Set([...petaBefore.keys()].filter(id => !petaUpdated.has(id)))
+    const idDiubahAtauBaru = [...petaUpdated.entries()]
+      .filter(([id, item]) => {
+        const lama = petaBefore.get(id)
+        return !lama || JSON.stringify(lama) !== JSON.stringify(item)
+      })
+      .map(([id]) => id)
+    const petaHasil = new Map(dariDasar.map(i => [i.id, i]))
+    idDihapus.forEach(id => petaHasil.delete(id))
+    idDiubahAtauBaru.forEach(id => petaHasil.set(id, petaUpdated.get(id) as T))
+    const urutanId = dariDasar.filter(i => petaHasil.has(i.id)).map(i => i.id)
+    const idSudahDiurutkan = new Set(urutanId)
+    updated.forEach(item => {
+      if (petaHasil.has(item.id) && !idSudahDiurutkan.has(item.id)) { urutanId.push(item.id); idSudahDiurutkan.add(item.id) }
+    })
+    return urutanId.map(id => petaHasil.get(id) as T)
+  }
+
+  async function rekonsiliasiArrayDenganCloud<T extends { id: string }>(
+    kunciTerpasang: string, before: T[], updated: T[], setState: (arr: T[]) => void
+  ) {
+    try {
+      const { data, error } = await supabase
+        .from('app_storage').select('value').eq('key', kunciTerpasang).maybeSingle()
+      if (error || !data || typeof data.value !== 'string') return
+      let dariCloudAsli: T[]
+      try {
+        const p = JSON.parse(data.value)
+        if (!Array.isArray(p)) return
+        dariCloudAsli = p
+      } catch { return }
+
+      const hasilOtoritatif = gabungkanArrayId(dariCloudAsli, before, updated)
+      const jsonOtoritatif = hasilOtoritatif.length > 0 ? JSON.stringify(hasilOtoritatif) : null
+      const jsonSaatIni = localStorage.getItem(kunciTerpasang)
+      if (jsonSaatIni === jsonOtoritatif) return
+
+      if (jsonOtoritatif) localStorage.setItem(kunciTerpasang, jsonOtoritatif)
+      else localStorage.removeItem(kunciTerpasang)
+      setState(hasilOtoritatif)
+    } catch {
+      // Gagal terhubung (mis. offline) -- biarkan versi optimistik lokal tetap berlaku.
+    }
+  }
+
+  function saveArrayAman<T extends { id: string }>(key: string, before: T[], updated: T[], setState: (arr: T[]) => void): T[] {
+    const kunciTerpasang = kunciAsli(key)
+    let dariLokal: T[] | null = null
+    try {
+      const raw = localStorage.getItem(kunciTerpasang)
+      if (raw) { const p = JSON.parse(raw); if (Array.isArray(p)) dariLokal = p }
+    } catch { dariLokal = null }
+
+    const hasil = dariLokal === null ? updated : gabungkanArrayId(dariLokal, before, updated)
+    if (hasil.length > 0) localStorage.setItem(kunciTerpasang, JSON.stringify(hasil))
+    else localStorage.removeItem(kunciTerpasang)
+
+    rekonsiliasiArrayDenganCloud(kunciTerpasang, before, updated, setState)
+    return hasil
+  }
+
   // --- Identitas & Kop: Lembaga Pusat (Yayasan) dan Unit ---
   const updateIdentitasIndukField = (field: string, value: string) => {
     setIdentitasInduk((prev: any) => ({ ...prev, [field]: value }))
@@ -1715,7 +1789,7 @@ export default function JadwalPelajaranPage() {
       if (a.jenis === 'mapel' && b.jenis === 'mapel') return Number(a.jamKe) - Number(b.jamKe)
       return 0
     })
-    setDaftarWaktu(updated); save('master_pemetaan_waktu', updated)
+    setDaftarWaktu(saveArrayAman('master_pemetaan_waktu', daftarWaktu, updated, setDaftarWaktu))
     setLabelWaktu(''); setEditWaktuId(null); setJamKeNomor('1'); setWaktuMulai('07.30'); setWaktuSelesai('08.10'); setJenisWaktu('mapel')
   }
 
@@ -1735,9 +1809,9 @@ export default function JadwalPelajaranPage() {
   const handleHapusWaktu = (id: string) => {
     if (!confirm('Hapus slot waktu ini?')) return
     const filtered = daftarWaktu.filter(w => w.id !== id)
-    setDaftarWaktu(filtered); save('master_pemetaan_waktu', filtered)
+    setDaftarWaktu(saveArrayAman('master_pemetaan_waktu', daftarWaktu, filtered, setDaftarWaktu))
     const jf = daftarJadwal.filter(j => j.waktuId !== id)
-    setDaftarJadwal(jf); save('data_jadwal_pelajaran', jf)
+    setDaftarJadwal(saveArrayAman('data_jadwal_pelajaran', daftarJadwal, jf, setDaftarJadwal))
   }
 
   // ============================================================
@@ -1755,11 +1829,11 @@ export default function JadwalPelajaranPage() {
       const updated = daftarKelasGabungan.map(kg => kg.id === editGabId ? {
         ...kg, mapelId: formGabMapelId, guruId: formGabGuruId || null, rombelIds: formGabRombelIds, keterangan: formGabKet
       } : kg)
-      setDaftarKelasGabungan(updated); save('master_kelas_gabungan', updated)
+      setDaftarKelasGabungan(saveArrayAman('master_kelas_gabungan', daftarKelasGabungan, updated, setDaftarKelasGabungan))
     } else {
       const kg: KelasGabungan = { id: 'gabung-' + Date.now(), mapelId: formGabMapelId, guruId: formGabGuruId || null, rombelIds: formGabRombelIds, keterangan: formGabKet }
       const updated = [...daftarKelasGabungan, kg]
-      setDaftarKelasGabungan(updated); save('master_kelas_gabungan', updated)
+      setDaftarKelasGabungan(saveArrayAman('master_kelas_gabungan', daftarKelasGabungan, updated, setDaftarKelasGabungan))
     }
     resetFormGabungan()
   }
@@ -1771,7 +1845,7 @@ export default function JadwalPelajaranPage() {
   const handleHapusGabungan = (id: string) => {
     if (!confirm('Hapus aturan kelas gabungan ini?')) return
     const filtered = daftarKelasGabungan.filter(kg => kg.id !== id)
-    setDaftarKelasGabungan(filtered); save('master_kelas_gabungan', filtered)
+    setDaftarKelasGabungan(saveArrayAman('master_kelas_gabungan', daftarKelasGabungan, filtered, setDaftarKelasGabungan))
     if (editGabId === id) resetFormGabungan()
   }
 
@@ -1792,11 +1866,11 @@ export default function JadwalPelajaranPage() {
         ...jg, rombelId: formGilRombelId, hari: formGilHari, waktuId: formGilWaktuId,
         mapelGuruList: formGilMapelGuru.filter(mg => mg.mapelId), keterangan: formGilKet
       } : jg)
-      setDaftarJadwalGiliran(updated); save('master_jadwal_giliran', updated)
+      setDaftarJadwalGiliran(saveArrayAman('master_jadwal_giliran', daftarJadwalGiliran, updated, setDaftarJadwalGiliran))
     } else {
       const jg: JadwalGiliran = { id: 'gilir-' + Date.now(), rombelId: formGilRombelId, hari: formGilHari, waktuId: formGilWaktuId, mapelGuruList: formGilMapelGuru.filter(mg => mg.mapelId), keterangan: formGilKet }
       const updated = [...daftarJadwalGiliran, jg]
-      setDaftarJadwalGiliran(updated); save('master_jadwal_giliran', updated)
+      setDaftarJadwalGiliran(saveArrayAman('master_jadwal_giliran', daftarJadwalGiliran, updated, setDaftarJadwalGiliran))
     }
     resetFormGiliran()
   }
@@ -1810,7 +1884,7 @@ export default function JadwalPelajaranPage() {
   const handleHapusGiliran = (id: string) => {
     if (!confirm('Hapus jadwal giliran ini?')) return
     const filtered = daftarJadwalGiliran.filter(jg => jg.id !== id)
-    setDaftarJadwalGiliran(filtered); save('master_jadwal_giliran', filtered)
+    setDaftarJadwalGiliran(saveArrayAman('master_jadwal_giliran', daftarJadwalGiliran, filtered, setDaftarJadwalGiliran))
     if (editGilId === id) resetFormGiliran()
   }
 
@@ -1859,7 +1933,7 @@ export default function JadwalPelajaranPage() {
         hari: formTetapHari, waktuId: formTetapWaktuId,
         berlakuUntuk: formTetapBerlaku, lembagaIds: formTetapLembagaIds, rombelIds: formTetapRombelIds, warna: formTetapWarna
       } : jt)
-      setDaftarJadwalTetap(updated); save('master_jadwal_tetap', updated)
+      setDaftarJadwalTetap(saveArrayAman('master_jadwal_tetap', daftarJadwalTetap, updated, setDaftarJadwalTetap))
     } else if (formTetapJenis === 'mapel' && jumlahJp > 1) {
       // Isi OTOMATIS beberapa slot berturutan mulai dari slot yang dipilih.
       const slotUrutMapel = daftarWaktu.filter(w => w.jenis === 'mapel').sort((a, b) => Number(a.jamKe) - Number(b.jamKe))
@@ -1874,7 +1948,7 @@ export default function JadwalPelajaranPage() {
         kelompokId,
       }))
       const updated = [...daftarJadwalTetap, ...barisBaru]
-      setDaftarJadwalTetap(updated); save('master_jadwal_tetap', updated)
+      setDaftarJadwalTetap(saveArrayAman('master_jadwal_tetap', daftarJadwalTetap, updated, setDaftarJadwalTetap))
     } else {
       const jt: JadwalTetap = {
         id: 'tetap-' + Date.now(), jenis: formTetapJenis, nama: namaAkhir,
@@ -1882,7 +1956,7 @@ export default function JadwalPelajaranPage() {
         hari: formTetapHari, waktuId: formTetapWaktuId, berlakuUntuk: formTetapBerlaku, lembagaIds: formTetapLembagaIds, rombelIds: formTetapRombelIds, warna: formTetapWarna
       }
       const updated = [...daftarJadwalTetap, jt]
-      setDaftarJadwalTetap(updated); save('master_jadwal_tetap', updated)
+      setDaftarJadwalTetap(saveArrayAman('master_jadwal_tetap', daftarJadwalTetap, updated, setDaftarJadwalTetap))
     }
     resetFormTetap()
   }
@@ -1903,7 +1977,7 @@ export default function JadwalPelajaranPage() {
     const filtered = target?.kelompokId
       ? daftarJadwalTetap.filter(jt => jt.kelompokId !== target.kelompokId)
       : daftarJadwalTetap.filter(jt => jt.id !== id)
-    setDaftarJadwalTetap(filtered); save('master_jadwal_tetap', filtered)
+    setDaftarJadwalTetap(saveArrayAman('master_jadwal_tetap', daftarJadwalTetap, filtered, setDaftarJadwalTetap))
     if (editTetapId === id) resetFormTetap()
   }
 
@@ -1921,11 +1995,11 @@ export default function JadwalPelajaranPage() {
 
     if (editLarId) {
       const updated = daftarLarangan.map(l => l.id === editLarId ? { ...l, setelahMapelId: formLarSetelahId, dilarangMapelIds: formLarDilarangIds } : l)
-      setDaftarLarangan(updated); save('master_larangan_beriringan', updated)
+      setDaftarLarangan(saveArrayAman('master_larangan_beriringan', daftarLarangan, updated, setDaftarLarangan))
     } else {
       const l: LaranganBeriringan = { id: 'larangan-' + Date.now(), setelahMapelId: formLarSetelahId, dilarangMapelIds: formLarDilarangIds }
       const updated = [...daftarLarangan, l]
-      setDaftarLarangan(updated); save('master_larangan_beriringan', updated)
+      setDaftarLarangan(saveArrayAman('master_larangan_beriringan', daftarLarangan, updated, setDaftarLarangan))
     }
     resetFormLarangan()
   }
@@ -1937,7 +2011,7 @@ export default function JadwalPelajaranPage() {
   const handleHapusLarangan = (id: string) => {
     if (!confirm('Hapus aturan larangan beriringan ini?')) return
     const filtered = daftarLarangan.filter(l => l.id !== id)
-    setDaftarLarangan(filtered); save('master_larangan_beriringan', filtered)
+    setDaftarLarangan(saveArrayAman('master_larangan_beriringan', daftarLarangan, filtered, setDaftarLarangan))
     if (editLarId === id) resetFormLarangan()
   }
 
@@ -2327,8 +2401,7 @@ export default function JadwalPelajaranPage() {
       if (!s) { alert('Tidak ada tindakan untuk dibatalkan.'); return }
       const parsed = JSON.parse(s)
       if (!confirm(`Kembalikan jadwal ke kondisi SEBELUM "${parsed.deskripsi}"? Jadwal yang ada SEKARANG akan diganti dengan kondisi sebelumnya.`)) return
-      setDaftarJadwal(parsed.data)
-      save('data_jadwal_pelajaran', parsed.data)
+      setDaftarJadwal(saveArrayAman('data_jadwal_pelajaran', daftarJadwal, parsed.data, setDaftarJadwal))
       localStorage.removeItem(kunciTahun('_undo_jadwal_snapshot'))
       setUndoTersedia(null)
       alert('Berhasil dikembalikan ke kondisi sebelumnya.')
@@ -2356,8 +2429,7 @@ export default function JadwalPelajaranPage() {
 
     simpanSnapshotUndo(`Hapus Hasil Generate (${namaCakupan})`)
     const sisa = daftarJadwal.filter(j => !rombelTargetSet.has(j.rombelId))
-    setDaftarJadwal(sisa)
-    save('data_jadwal_pelajaran', sisa)
+    setDaftarJadwal(saveArrayAman('data_jadwal_pelajaran', daftarJadwal, sisa, setDaftarJadwal))
     setUndoTersedia({ deskripsi: `Hapus Hasil Generate (${namaCakupan})`, waktu: Date.now() })
     alert(`Berhasil menghapus ${jumlahTerdampak} slot jadwal untuk cakupan "${namaCakupan}". (Bisa di-undo lewat tombol "Undo Terakhir" kalau perlu.)`)
   }
@@ -2790,7 +2862,7 @@ export default function JadwalPelajaranPage() {
       })
 
       simpanSnapshotUndo(`Generate Jadwal Otomatis (percobaan ke-${attempt})`)
-      setDaftarJadwal(arrFinal); save('data_jadwal_pelajaran', arrFinal)
+      setDaftarJadwal(saveArrayAman('data_jadwal_pelajaran', daftarJadwal, arrFinal, setDaftarJadwal))
       setUndoTersedia({ deskripsi: `Generate Jadwal Otomatis (percobaan ke-${attempt})`, waktu: Date.now() })
       setIsGenerating(false); setGenerateProgress('')
       const bg: string[]=[]
@@ -2855,7 +2927,7 @@ export default function JadwalPelajaranPage() {
         const f = kgHapus
           ? daftarJadwal.filter(j => !(j.hari === hari && j.waktuId === waktuId && j.guruId === existing.guruId && j.mapelId === existing.mapelId && kgHapus.rombelIds.includes(j.rombelId)))
           : daftarJadwal.filter(j => j.id !== existing.id)
-        setDaftarJadwal(f); save('data_jadwal_pelajaran', f)
+        setDaftarJadwal(saveArrayAman('data_jadwal_pelajaran', daftarJadwal, f, setDaftarJadwal))
       }
       setEditingCell(null); setEditGuruMapel(''); setEditJumlahJp(null)
       return
@@ -2890,7 +2962,7 @@ export default function JadwalPelajaranPage() {
           u = [...u, { id: 'jdwl-' + Date.now() + '-' + rid, hari, waktuId, rombelId: rid, guruId: gId, mapelId: mId }]
         }
       })
-      setDaftarJadwal(u); save('data_jadwal_pelajaran', u)
+      setDaftarJadwal(saveArrayAman('data_jadwal_pelajaran', daftarJadwal, u, setDaftarJadwal))
       setEditingCell(null); setEditGuruMapel(''); setEditJumlahJp(null)
       return
     }
@@ -2930,7 +3002,7 @@ export default function JadwalPelajaranPage() {
         }
       })
     })
-    setDaftarJadwal(u); save('data_jadwal_pelajaran', u)
+    setDaftarJadwal(saveArrayAman('data_jadwal_pelajaran', daftarJadwal, u, setDaftarJadwal))
     alert(`✅ Berhasil mengisi ${jumlahJp} JP berturutan (${slotTarget.map(s => s.jamKe).join(', ')}) untuk ${hari}${targetRombelIds.length > 1 ? ` di ${targetRombelIds.length} kelas gabungan` : ''}.`)
     setEditingCell(null); setEditGuruMapel(''); setEditJumlahJp(null)
   }

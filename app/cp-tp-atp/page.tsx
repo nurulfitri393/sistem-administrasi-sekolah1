@@ -502,20 +502,11 @@ export default function CpTpAtpPage() {
   // tampilan TIDAK bergantung pada urutan larik ini (lihat urutanDiKelas utk
   // ATP, dan pengelompokan per mapelId/fase di tempat lain) jadi aman disusun
   // ulang oleh proses gabung ini.
-  function simpanArrayBersama<T extends { id: string }>(kunciDasar: string, before: T[], updated: T[]): T[] {
-    const kunciAsli = KUNCI_TAHUN_CPTPATP.has(kunciDasar) ? kunciTahun(kunciDasar) : kunciDasar
-    let dariCloud: T[] | null = null
-    try {
-      const raw = localStorage.getItem(kunciAsli)
-      if (raw) { const p = JSON.parse(raw); if (Array.isArray(p)) dariCloud = p }
-    } catch { dariCloud = null }
-
-    if (dariCloud === null) {
-      if (updated.length > 0) localStorage.setItem(kunciAsli, JSON.stringify(updated))
-      else localStorage.removeItem(kunciAsli)
-      return updated
-    }
-
+  // Logika gabung MURNI (tanpa efek samping) dipakai DUA KALI: (1) sinkron, langsung
+  // memakai apa yang ada di localStorage perangkat ini supaya UI terasa instan; dan
+  // (2) async lewat rekonsiliasiDenganCloud() di bawah, memakai data ASLI dari tabel
+  // Supabase (bukan cuma cermin lokalnya) sebagai dasar gabungan yang OTORITATIF.
+  function gabungkanArray<T extends { id: string }>(dariDasar: T[], before: T[], updated: T[]): T[] {
     const petaBefore = new Map(before.map(i => [i.id, i]))
     const petaUpdated = new Map(updated.map(i => [i.id, i]))
 
@@ -527,23 +518,88 @@ export default function CpTpAtpPage() {
       })
       .map(([id]) => id)
 
-    const petaHasil = new Map(dariCloud.map(i => [i.id, i]))
+    const petaHasil = new Map(dariDasar.map(i => [i.id, i]))
     idDihapus.forEach(id => petaHasil.delete(id))
     idDiubahAtauBaru.forEach(id => petaHasil.set(id, petaUpdated.get(id) as T))
 
-    const urutanId = dariCloud.filter(i => petaHasil.has(i.id)).map(i => i.id)
+    const urutanId = dariDasar.filter(i => petaHasil.has(i.id)).map(i => i.id)
     const idSudahDiurutkan = new Set(urutanId)
     updated.forEach(item => {
       if (petaHasil.has(item.id) && !idSudahDiurutkan.has(item.id)) { urutanId.push(item.id); idSudahDiurutkan.add(item.id) }
     })
+    return urutanId.map(id => petaHasil.get(id) as T)
+  }
 
-    const hasil = urutanId.map(id => petaHasil.get(id) as T)
+  // AKAR MASALAH KELIMA (paling sulit dilacak, penyebab paling mungkin dari laporan
+  // "sudah lama jeda dari isi ke refresh, tapi tetap hilang & tidak tersimpan di
+  // Supabase"): simpanArrayBersama SEBELUMNYA memakai localStorage PERANGKAT INI
+  // sebagai "dariCloud" -- padahal itu cuma CERMIN lokal yang bergantung pada
+  // Realtime supaya tetap segar. Kalau tab/perangkat LAIN (mis. Admin yang tab-nya
+  // sudah lama terbuka di latar belakang, sehingga koneksi Realtime-nya sempat putus
+  // tanpa ada tanda apapun di UI) melakukan AKSI SIMPAN APAPUN di CP/TP/ATP saat
+  // cermin lokalnya sendiri KETINGGALAN (belum menerima entri baru milik guru lain
+  // yang baru saja tersimpan ke cloud), gabungan yang dihasilkan akan memakai dasar
+  // yang ketinggalan itu -- entri guru lain yang tidak pernah sempat masuk ke cermin
+  // lokal tab tsb ikut LENYAP dari hasil gabungan, dan hasil itu DITULIS ULANG ke
+  // Supabase, MENIMPA & MENGHAPUS SUNGGUHAN entri yang sebelumnya sudah berhasil
+  // tersimpan di cloud. Ini menjelaskan kenapa banner "belum tersinkron" tidak
+  // pernah muncul (penulisnya sendiri MERASA berhasil, error-nya bukan di situ) dan
+  // kenapa tidak spesifik ke satu jenis perangkat (siapapun dengan cermin lokal yang
+  // ketinggalan bisa memicunya).
+  //
+  // PERBAIKAN: setelah menulis versi optimistik (dari cermin lokal, supaya UI tetap
+  // instan seperti sebelumnya), SEGERA lakukan gabungan ULANG di latar belakang
+  // memakai baris ASLI dari tabel Supabase sebagai dasar -- kalau ternyata berbeda
+  // dari versi optimistik (karena dasarnya memang ketinggalan), koreksi localStorage
+  // (dan lewat penyadap, otomatis mengoreksi balik cloud) dengan versi yang benar.
+  async function rekonsiliasiDenganCloud<T extends { id: string }>(
+    kunciAsli: string, before: T[], updated: T[], setState: (arr: T[]) => void
+  ) {
+    try {
+      const { data, error } = await supabase
+        .from('app_storage').select('value').eq('key', kunciAsli).maybeSingle()
+      if (error || !data || typeof data.value !== 'string') return
+      let dariCloudAsli: T[]
+      try {
+        const p = JSON.parse(data.value)
+        if (!Array.isArray(p)) return
+        dariCloudAsli = p
+      } catch { return }
+
+      const hasilOtoritatif = gabungkanArray(dariCloudAsli, before, updated)
+      const jsonOtoritatif = hasilOtoritatif.length > 0 ? JSON.stringify(hasilOtoritatif) : null
+      const jsonSaatIni = localStorage.getItem(kunciAsli)
+      if (jsonSaatIni === jsonOtoritatif) return // dasar lokal tadi sudah segar, tidak ada yang perlu dikoreksi
+
+      if (jsonOtoritatif) localStorage.setItem(kunciAsli, jsonOtoritatif)
+      else localStorage.removeItem(kunciAsli)
+      setState(hasilOtoritatif)
+    } catch {
+      // Gagal terhubung (mis. sedang offline) -- biarkan versi optimistik lokal
+      // tetap berlaku, akan disamakan lagi lain waktu saat halaman dibuka ulang.
+    }
+  }
+
+  function simpanArrayBersama<T extends { id: string }>(
+    kunciDasar: string, before: T[], updated: T[], setState?: (arr: T[]) => void
+  ): T[] {
+    const kunciAsli = KUNCI_TAHUN_CPTPATP.has(kunciDasar) ? kunciTahun(kunciDasar) : kunciDasar
+    let dariLokal: T[] | null = null
+    try {
+      const raw = localStorage.getItem(kunciAsli)
+      if (raw) { const p = JSON.parse(raw); if (Array.isArray(p)) dariLokal = p }
+    } catch { dariLokal = null }
+
+    const hasil = dariLokal === null ? updated : gabungkanArray(dariLokal, before, updated)
     if (hasil.length > 0) localStorage.setItem(kunciAsli, JSON.stringify(hasil))
     else localStorage.removeItem(kunciAsli)
+
+    if (setState) rekonsiliasiDenganCloud(kunciAsli, before, updated, setState)
     return hasil
   }
 
-  const save = <T extends { id: string }>(key: string, before: T[], updated: T[]): T[] => simpanArrayBersama(key, before, updated)
+  const save = <T extends { id: string }>(key: string, before: T[], updated: T[], setState?: (arr: T[]) => void): T[] =>
+    simpanArrayBersama(key, before, updated, setState)
 
   // ─────────────────────────────────────────────────────────
   // CP CRUD (per elemen — berlaku untuk satu fase, bukan satu kelas)
@@ -554,11 +610,11 @@ export default function CpTpAtpPage() {
     }
     if (editCpId) {
       const updated = daftarCp.map(c => c.id === editCpId ? { ...c, ...formCp } as CP : c)
-      setDaftarCp(save('data_cp', daftarCp, updated))
+      setDaftarCp(save('data_cp', daftarCp, updated, setDaftarCp))
     } else {
       const newCp: CP = { id: 'cp-'+Date.now(), createdAt: new Date().toISOString(), ...formCp as any }
       const updated = [...daftarCp, newCp]
-      setDaftarCp(save('data_cp', daftarCp, updated))
+      setDaftarCp(save('data_cp', daftarCp, updated, setDaftarCp))
     }
     setFormCp({}); setEditCpId(null); setShowFormCp(false)
   }
@@ -570,10 +626,10 @@ export default function CpTpAtpPage() {
     const updMateri = daftarMateri.filter(m => m.cpId !== id)
     const updTp = daftarTp.filter(t => t.cpId !== id)
     const updAtp = daftarAtp.filter(a => !tpIds.includes(a.tpId))
-    setDaftarCp(save('data_cp', daftarCp, updCp))
-    setDaftarMateri(save('data_materi', daftarMateri, updMateri))
-    setDaftarTp(save('data_tp', daftarTp, updTp))
-    setDaftarAtp(save('data_atp', daftarAtp, updAtp))
+    setDaftarCp(save('data_cp', daftarCp, updCp, setDaftarCp))
+    setDaftarMateri(save('data_materi', daftarMateri, updMateri, setDaftarMateri))
+    setDaftarTp(save('data_tp', daftarTp, updTp, setDaftarTp))
+    setDaftarAtp(save('data_atp', daftarAtp, updAtp, setDaftarAtp))
   }
 
   // ─────────────────────────────────────────────────────────
@@ -584,7 +640,7 @@ export default function CpTpAtpPage() {
     const cp = daftarCp.find(c => c.id === formMateri.cpId)
     if (editMateriId) {
       const updated = daftarMateri.map(m => m.id === editMateriId ? { ...m, ...formMateri } as Materi : m)
-      setDaftarMateri(save('data_materi', daftarMateri, updated))
+      setDaftarMateri(save('data_materi', daftarMateri, updated, setDaftarMateri))
     } else {
       const newMateri: Materi = {
         id: 'mat-'+Date.now(),
@@ -595,7 +651,7 @@ export default function CpTpAtpPage() {
         ...formMateri as any
       }
       const updated = [...daftarMateri, newMateri]
-      setDaftarMateri(save('data_materi', daftarMateri, updated))
+      setDaftarMateri(save('data_materi', daftarMateri, updated, setDaftarMateri))
     }
     setFormMateri({}); setEditMateriId(null); setShowFormMateri(false)
   }
@@ -607,10 +663,10 @@ export default function CpTpAtpPage() {
       : 'Hapus materi ini?'
     if (!confirm(pesan)) return
     const updated = daftarMateri.filter(m => m.id !== id)
-    setDaftarMateri(save('data_materi', daftarMateri, updated))
+    setDaftarMateri(save('data_materi', daftarMateri, updated, setDaftarMateri))
     if (tpTerkait.length > 0) {
       const updTp = daftarTp.map(t => t.materiId === id ? { ...t, materiId: '' } : t)
-      setDaftarTp(save('data_tp', daftarTp, updTp))
+      setDaftarTp(save('data_tp', daftarTp, updTp, setDaftarTp))
     }
   }
 
@@ -624,7 +680,7 @@ export default function CpTpAtpPage() {
     const cp = daftarCp.find(c => c.id === formTp.cpId)
     if (editTpId) {
       const updated = daftarTp.map(t => t.id === editTpId ? { ...t, ...formTp } as TP : t)
-      setDaftarTp(save('data_tp', daftarTp, updated))
+      setDaftarTp(save('data_tp', daftarTp, updated, setDaftarTp))
     } else {
       // Nomor otomatis
       const tpDiCp = daftarTp.filter(t => t.cpId === formTp.cpId)
@@ -639,7 +695,7 @@ export default function CpTpAtpPage() {
         ...formTp as any
       }
       const updated = [...daftarTp, newTp]
-      setDaftarTp(save('data_tp', daftarTp, updated))
+      setDaftarTp(save('data_tp', daftarTp, updated, setDaftarTp))
     }
     setFormTp({ dimensiPancasila: [] }); setEditTpId(null); setShowFormTp(false)
   }
@@ -648,8 +704,8 @@ export default function CpTpAtpPage() {
     if (!confirm('Hapus TP ini? Pemetaannya ke kelas (ATP) juga ikut terhapus.')) return
     const updTp = daftarTp.filter(t => t.id !== id)
     const updAtp = daftarAtp.filter(a => a.tpId !== id)
-    setDaftarTp(save('data_tp', daftarTp, updTp))
-    setDaftarAtp(save('data_atp', daftarAtp, updAtp))
+    setDaftarTp(save('data_tp', daftarTp, updTp, setDaftarTp))
+    setDaftarAtp(save('data_atp', daftarAtp, updAtp, setDaftarAtp))
   }
 
   const toggleDimensi = (d: string) => {
@@ -685,7 +741,7 @@ export default function CpTpAtpPage() {
       createdAt: new Date().toISOString()
     }
     const updated = [...daftarAtp, newEntry]
-    setDaftarAtp(save('data_atp', daftarAtp, updated))
+    setDaftarAtp(save('data_atp', daftarAtp, updated, setDaftarAtp))
   }
 
   // Pindahkan entri yang sudah ada ke kelas lain (drag antar kolom)
@@ -699,7 +755,7 @@ export default function CpTpAtpPage() {
     const sisanya = daftarAtp.filter(a =>
       !(a.mapelId === entry.mapelId && a.fase === entry.fase && (a.kelas === entry.kelas || a.kelas === kelasBaru)) )
     const updated = [...sisanya, ...kelompokLama, ...kelompokTujuan, entryPindah]
-    setDaftarAtp(save('data_atp', daftarAtp, updated))
+    setDaftarAtp(save('data_atp', daftarAtp, updated, setDaftarAtp))
   }
 
   // Urutkan bebas di dalam satu kolom kelas
@@ -718,7 +774,7 @@ export default function CpTpAtpPage() {
     const direindeks = baru.map((item, i) => ({ ...item, urutanDiKelas: i + 1 }))
     const rest = daftarAtp.filter(a => !(a.mapelId === entry.mapelId && a.fase === entry.fase && a.kelas === entry.kelas))
     const updated = [...rest, ...direindeks]
-    setDaftarAtp(save('data_atp', daftarAtp, updated))
+    setDaftarAtp(save('data_atp', daftarAtp, updated, setDaftarAtp))
   }
 
   // Kembalikan TP ke pool (hapus pemetaan kelasnya)
@@ -728,13 +784,13 @@ export default function CpTpAtpPage() {
     const sisaKelompok = rekalkulasiKelas(daftarAtp.filter(a => a.mapelId === entry.mapelId && a.fase === entry.fase && a.kelas === entry.kelas && a.id !== entryId))
     const rest = daftarAtp.filter(a => !(a.mapelId === entry.mapelId && a.fase === entry.fase && a.kelas === entry.kelas))
     const updated = [...rest, ...sisaKelompok]
-    setDaftarAtp(save('data_atp', daftarAtp, updated))
+    setDaftarAtp(save('data_atp', daftarAtp, updated, setDaftarAtp))
   }
 
   // Ubah semester TP ini (dipakai untuk input otomatis ke Prota & Promes)
   const handleUbahSemester = (entryId: string, semester: '1'|'2') => {
     const updated = daftarAtp.map(a => a.id === entryId ? { ...a, semester } : a)
-    setDaftarAtp(save('data_atp', daftarAtp, updated))
+    setDaftarAtp(save('data_atp', daftarAtp, updated, setDaftarAtp))
   }
 
   // ── Drag & drop handlers
